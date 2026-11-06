@@ -26,6 +26,10 @@ float property MantellaEffectResponseTimer auto
 bool property showReminderMessages auto
 
 int property MantellaStartHotkey auto
+; LIVINGWORLD PATCH: save-load timeline for the Living World server (kept in the save)
+int property LivingWorldTimelineId auto        ; timeline this save is on (0 until the server answers)
+int property LivingWorldLoadNonce auto         ; random number picked at each load (0 = no load seen yet)
+float property LivingWorldLoadedGameDays auto  ; game days at that load
 int property MantellaListenerTextHotkey auto
 int property MantellaEndHotkey auto
 int property MantellaCustomGameEventHotkey auto
