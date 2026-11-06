@@ -210,6 +210,10 @@ Event OnPlayerLoadGame()
     If(conversation.IsRunning())
         conversation.EndConversation()
     endif
+    ; LIVINGWORLD PATCH: tell the server about this load with the next conversation start, so NPCs
+    ; forget whatever happened after this save
+    repository.LivingWorldLoadNonce = Utility.RandomInt(1, 2000000000)
+    repository.LivingWorldLoadedGameDays = conversation.GameDaysPassed.GetValue() + 1 ; +1 because days start at 0
     ; conversation.RegisterForConversationEvents()
     RegisterForSingleUpdate(repository.radiantFrequency)
 EndEvent

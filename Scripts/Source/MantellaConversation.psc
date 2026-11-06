@@ -91,6 +91,7 @@ function StartConversation(Actor[] actorsToStartConversationWith)
     
     SKSE_HTTP.setString(handle, mConsts.KEY_REQUESTTYPE, mConsts.KEY_REQUESTTYPE_STARTCONVERSATION)
     SKSE_HTTP.setString(handle, mConsts.KEY_STARTCONVERSATION_WORLDID, PlayerRef.GetDisplayName() + repository.worldID)
+    AddLivingWorldLoadInfo(handle) ; LIVINGWORLD PATCH
     BuildContext(true)
     AddCurrentActorsAndContext(handle, true)
 
@@ -174,6 +175,9 @@ function ContinueConversation(string nextAction, int handle)
         _hasBeenStopped = false
         if(SKSE_HTTP.hasKey(handle,mConsts.KEY_STARTCONVERSATION_USENARRATOR))
             _useNarrator = SKSE_HTTP.getBool(handle, mConsts.KEY_STARTCONVERSATION_USENARRATOR, false)
+        endif
+        if(SKSE_HTTP.hasKey(handle, "mantella_lw_timeline_id")) ; LIVINGWORLD PATCH: remember the timeline in the save
+            repository.LivingWorldTimelineId = SKSE_HTTP.getInt(handle, "mantella_lw_timeline_id", repository.LivingWorldTimelineId)
         endif
         ;Debug.Notification("Conversation started.")
         RequestContinueConversation()
@@ -989,10 +993,41 @@ int[] function UpdateNpcsInConversationArray()
     EndWhile
 endFunction
 
+; LIVINGWORLD PATCH: the plugin file each form ID comes from, so the server can tell NPCs apart
+; without depending on load order. Light plugins (FE) and runtime forms (FF) are left to the server.
+string function LivingWorldPluginName(int formId)
+    int modIndex = Math.RightShift(formId, 24)
+    if (modIndex < 0 || modIndex >= 254)
+        return ""
+    endif
+    return Game.GetModName(modIndex)
+endFunction
+
+function AddLivingWorldPluginNames(int handle, Actor actorToBuild)
+    string basePlugin = LivingWorldPluginName((actorToBuild.getactorbase() as form).getformid())
+    if (basePlugin != "")
+        SKSE_HTTP.setString(handle, "mantella_actor_base_plugin", basePlugin)
+    endif
+    string refPlugin = LivingWorldPluginName((actorToBuild as form).getformid())
+    if (refPlugin != "")
+        SKSE_HTTP.setString(handle, "mantella_actor_ref_plugin", refPlugin)
+    endif
+endFunction
+
+; LIVINGWORLD PATCH: the save-load info the server needs to roll memories back to this save
+function AddLivingWorldLoadInfo(int handle)
+    if (repository.LivingWorldLoadNonce != 0)
+        SKSE_HTTP.setInt(handle, "mantella_lw_timeline_id", repository.LivingWorldTimelineId)
+        SKSE_HTTP.setInt(handle, "mantella_lw_load_nonce", repository.LivingWorldLoadNonce)
+        SKSE_HTTP.setFloat(handle, "mantella_lw_loaded_game_days", repository.LivingWorldLoadedGameDays)
+    endif
+endFunction
+
 int function buildActorSetting(Actor actorToBuild)  
     int handle = SKSE_HTTP.createDictionary()
     SKSE_HTTP.setInt(handle, mConsts.KEY_ACTOR_BASEID, (actorToBuild.getactorbase() as form).getformid())
     SKSE_HTTP.setInt(handle, mConsts.KEY_ACTOR_REFID, (actorToBuild as form).getformid())
+    AddLivingWorldPluginNames(handle, actorToBuild) ; LIVINGWORLD PATCH
     SKSE_HTTP.setString(handle, mConsts.KEY_ACTOR_NAME, GetActorName(actorToBuild))
     bool isPlayerCharacter = actorToBuild == PlayerRef
     SKSE_HTTP.setBool(handle, mConsts.KEY_ACTOR_ISPLAYER, isPlayerCharacter)
