@@ -41,6 +41,7 @@ event OnInit()
     PlayerRef.AddSpell(MantellaRemoveNpcSpell)
     PlayerRef.AddSpell(MantellaRemoveNpcPower)
     PlayerRef.AddToFaction(repository.giafac_AllowDialogue);gia
+    repository.LivingWorldRegisterPerception() ; LIVINGWORLD PATCH
 endEvent
 
 Function AddIngameEventToConversation(string eventText)
@@ -214,6 +215,7 @@ Event OnPlayerLoadGame()
     ; forget whatever happened after this save
     repository.LivingWorldLoadNonce = Utility.RandomInt(1, 2000000000)
     repository.LivingWorldLoadedGameDays = conversation.GameDaysPassed.GetValue() + 1 ; +1 because days start at 0
+    repository.LivingWorldRegisterPerception() ; LIVINGWORLD PATCH: listen for HIGGS grabs and eating again
     ; conversation.RegisterForConversationEvents()
     RegisterForSingleUpdate(repository.radiantFrequency)
 EndEvent
@@ -495,6 +497,7 @@ endEvent
 
 
 Event OnObjectEquipped(Form akBaseObject, ObjectReference akReference)
+    repository.LivingWorldConsumed(PlayerRef, akBaseObject, "equip") ; LIVINGWORLD PATCH: food, drink, potions
     if repository.playerTrackingOnObjectEquipped
         string itemEquipped = akBaseObject.getname()
 
