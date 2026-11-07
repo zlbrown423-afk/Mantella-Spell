@@ -25,6 +25,8 @@
         <!-- <Import>@ModsFolder\SKSE_HTTP\Scripts\Source</Import> -->
         <Import>@ModsFolder\SkyUI_5.1_SDK\Scripts\Source</Import>
         <Import>@ModsFolder\UIExtensions\scripts\source</Import>
+        <!-- Living World perception needs HIGGS's HiggsVR.psc. Point this at the folder of your HIGGS mod that holds it: -->
+        <!-- <Import>@ModsFolder\HIGGS\Scripts\Source</Import> -->
     </Imports>
     <Folders>        
         <Folder>./Scripts/Source</Folder>

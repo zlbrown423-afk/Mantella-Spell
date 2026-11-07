@@ -1083,6 +1083,8 @@ int function BuildContext(bool isConversationStart = false)
     string[] past_events = deepcopy(_ingameEvents)
     SKSE_HTTP.setStringArray(_contextHandle, mConsts.KEY_CONTEXT_INGAMEEVENTS, past_events)
     ClearIngameEvent()
+    ; LIVINGWORLD PATCH: perception records (grabs, eating, drinking) queued since the last request
+    SKSE_HTTP.setStringArray(_contextHandle, "mantella_lw_events", repository.LivingWorldTakeEvents())
 
     ; Add nearby actors context for action targeting
     int[] nearbyActorHandles = BuildNearbyActorsContext()

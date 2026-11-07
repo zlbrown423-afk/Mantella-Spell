@@ -326,3 +326,211 @@ Event OnKeyDown(int KeyCode)
         endIf
     endIf
 endEvent
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; LIVINGWORLD PATCH: perception                                                                      ;
+; The player grabbing an NPC (HIGGS grab/drop events) and eating or drinking (HIGGS hand-to-mouth or ;
+; the inventory) become text records queued here, saved with the game, and sent with the next       ;
+; Mantella request (MantellaConversation.BuildContext). The Living World server turns each record    ;
+; into one world event and a separate memory for the NPC grabbed and for each NPC who saw it.       ;
+; Record format: see livingworld/perception/records.py in MantellaExtension.                        ;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+string[] property LivingWorldEvents auto hidden     ; records waiting to be sent
+int property LivingWorldEventCounter auto hidden    ; makes each record key unique within a load
+bool property LivingWorldPerceptionOn = true auto hidden
+float property LivingWorldWitnessScanMeters = 25.0 auto hidden  ; witnesses further than this are not even sent
+int property LivingWorldMaxQueuedEvents = 40 auto hidden
+
+Actor _lwLeftHeld
+Actor _lwRightHeld
+float _lwLeftSince
+float _lwRightSince
+string _lwLeftNode
+string _lwRightNode
+Form _lwLastMouthForm
+float _lwLastMouthTime
+
+; Called on every game load (HIGGS registrations are not kept in the save).
+function LivingWorldRegisterPerception()
+    _lwLeftHeld = None
+    _lwRightHeld = None
+    if (SKSE.GetPluginVersion("HIGGS") > 0)
+        HiggsVR.RegisterForGrabEvent(self)
+        HiggsVR.RegisterForDropEvent(self)
+        HiggsVR.RegisterForConsumeEvent(self)
+        Debug.Trace("Mantella Living World: listening for HIGGS grab, drop and consume events")
+    else
+        Debug.Trace("Mantella Living World: HIGGS not found; grab perception is off")
+    endIf
+endFunction
+
+Event OnObjectGrabbed(ObjectReference akRef, bool abIsLeft)
+    Actor target = akRef as Actor
+    if (!LivingWorldPerceptionOn || !target || target == PlayerRef || target.IsDead())
+        return
+    endIf
+    string node = HiggsVR.GetGrabbedNodeName(abIsLeft)
+    float now = Utility.GetCurrentRealTime()
+    ; a hand that grabs again without a drop event: close the previous grab first
+    if (abIsLeft)
+        if (_lwLeftHeld)
+            LivingWorldRecordGrab(_lwLeftHeld, _lwLeftNode, "L", now - _lwLeftSince)
+        endIf
+        _lwLeftHeld = target
+        _lwLeftSince = now
+        _lwLeftNode = node
+    else
+        if (_lwRightHeld)
+            LivingWorldRecordGrab(_lwRightHeld, _lwRightNode, "R", now - _lwRightSince)
+        endIf
+        _lwRightHeld = target
+        _lwRightSince = now
+        _lwRightNode = node
+    endIf
+EndEvent
+
+Event OnObjectDropped(ObjectReference akRef, bool abIsLeft)
+    Actor target = akRef as Actor
+    if (!target)
+        return
+    endIf
+    float now = Utility.GetCurrentRealTime()
+    if (abIsLeft && _lwLeftHeld == target)
+        _lwLeftHeld = None
+        LivingWorldRecordGrab(target, _lwLeftNode, "L", now - _lwLeftSince)
+    elseIf (!abIsLeft && _lwRightHeld == target)
+        _lwRightHeld = None
+        LivingWorldRecordGrab(target, _lwRightNode, "R", now - _lwRightSince)
+    endIf
+EndEvent
+
+Event OnObjectConsumed(Form akForm, bool abIsLeft)
+    _lwLastMouthForm = akForm
+    _lwLastMouthTime = Utility.GetCurrentRealTime()
+    LivingWorldConsumed(PlayerRef, akForm, "higgs_mouth")
+EndEvent
+
+; Also called by MantellaListenerScript.OnObjectEquipped for food, drink and potions used from the inventory.
+function LivingWorldConsumed(Actor consumer, Form item, string via)
+    Potion p = item as Potion
+    if (!LivingWorldPerceptionOn || !p || p.IsPoison())
+        return
+    endIf
+    ; HIGGS eating also equips the item: count it once
+    if (via == "equip" && item == _lwLastMouthForm && Utility.GetCurrentRealTime() - _lwLastMouthTime < 3.0)
+        return
+    endIf
+    string foodFlag = "0"
+    if (p.IsFood())
+        foodFlag = "1"
+    endIf
+    string rec = LivingWorldHeader("consume") + "|actor=" + LivingWorldActorField(consumer) + "|item=" + item.GetName() + "|item_form=" + item.GetFormID() + "|food=" + foodFlag + "|via=" + via + "|qty=1"
+    rec += LivingWorldWitnesses(consumer, None)
+    LivingWorldQueue(rec)
+endFunction
+
+function LivingWorldRecordGrab(Actor target, string node, string hand, float seconds)
+    string rec = LivingWorldHeader("grab") + "|actor=" + LivingWorldActorField(PlayerRef) + "|target=" + LivingWorldActorField(target) + "|node=" + node + "|hand=" + hand + "|dur=" + seconds + "|trank=" + target.GetRelationshipRank(PlayerRef)
+    rec += LivingWorldWitnesses(PlayerRef, target)
+    LivingWorldQueue(rec)
+    ; let a running conversation react straight away, as Mantella's own events do
+    string part = node
+    if (part == "")
+        part = "body"
+    endIf
+    ListenerScript.AddIngameEventToConversation(PlayerRef.GetDisplayName() + " grabbed " + target.GetDisplayName() + " (" + part + ") for " + (seconds as int) + " seconds.")
+endFunction
+
+string function LivingWorldHeader(string kind)
+    LivingWorldEventCounter += 1
+    string loc = (PlayerRef.GetCurrentLocation() as Form).GetName()
+    if (loc == "")
+        loc = "Skyrim"
+    endIf
+    return "v=1|key=" + LivingWorldLoadNonce + "-" + LivingWorldEventCounter + "|type=" + kind + "|gt=" + (Utility.GetCurrentGameTime() + 1.0) + "|loc=" + loc
+endFunction
+
+; ref^base^ref_plugin^base_plugin^is_player^name (plugin names: see MantellaConversation.LivingWorldPluginName)
+string function LivingWorldActorField(Actor a)
+    MantellaConversation conv = ListenerScript.conversation
+    int refId = (a as Form).GetFormID()
+    int baseId = (a.GetActorBase() as Form).GetFormID()
+    string isPlayer = "0"
+    if (a == PlayerRef)
+        isPlayer = "1"
+    endIf
+    return refId + "^" + baseId + "^" + conv.LivingWorldPluginName(refId) + "^" + conv.LivingWorldPluginName(baseId) + "^" + isPlayer + "^" + a.GetDisplayName()
+endFunction
+
+; One "|w=" entry per NPC near the event: distance (m), line of sight, and the game's own relationship
+; ranks towards the actor and the target. The server decides who actually perceived it.
+string function LivingWorldWitnesses(Actor doer, Actor target)
+    string result = ""
+    Actor center = target
+    if (!center)
+        center = doer
+    endIf
+    Actor[] candidates = ListenerScript.ScanNearbyActors()
+    FormList participants = ListenerScript.conversation.Participants
+    int count = candidates.Length
+    int total = count + participants.GetSize()
+    int i = 0
+    Actor[] seenAlready = new Actor[20]
+    int seenCount = 0
+    while (i < total && seenCount < 20)
+        Actor w
+        if (i < count)
+            w = candidates[i]
+        else
+            w = participants.GetAt(i - count) as Actor
+        endIf
+        if (w && w != doer && w != target && w != PlayerRef && !w.IsDead() && seenAlready.Find(w) < 0)
+            seenAlready[seenCount] = w
+            seenCount += 1
+            float meters = w.GetDistance(center) / 71.0210
+            if (meters <= LivingWorldWitnessScanMeters)
+                string los = "0"
+                if (w.HasLOS(center) || w.HasLOS(doer))
+                    los = "1"
+                endIf
+                string rankTarget = ""
+                if (target)
+                    rankTarget = w.GetRelationshipRank(target) as string
+                endIf
+                result += "|w=" + meters + "^" + los + "^" + w.GetRelationshipRank(doer) + "^" + rankTarget + "^" + LivingWorldActorField(w)
+            endIf
+        endIf
+        i += 1
+    endWhile
+    return result
+endFunction
+
+function LivingWorldQueue(string rec)
+    if (!LivingWorldEvents)
+        LivingWorldEvents = Utility.CreateStringArray(0)
+    endIf
+    if (LivingWorldEvents.Length >= LivingWorldMaxQueuedEvents)
+        ; full: drop the oldest
+        string[] kept = Utility.CreateStringArray(LivingWorldEvents.Length - 1)
+        int i = 1
+        while (i < LivingWorldEvents.Length)
+            kept[i - 1] = LivingWorldEvents[i]
+            i += 1
+        endWhile
+        LivingWorldEvents = kept
+    endIf
+    LivingWorldEvents = Utility.ResizeStringArray(LivingWorldEvents, LivingWorldEvents.Length + 1)
+    LivingWorldEvents[LivingWorldEvents.Length - 1] = rec
+    Debug.Trace("Mantella Living World: queued " + rec)
+endFunction
+
+; MantellaConversation.BuildContext takes the queue with each request.
+string[] function LivingWorldTakeEvents()
+    string[] taken = LivingWorldEvents
+    LivingWorldEvents = Utility.CreateStringArray(0)
+    if (!taken)
+        taken = Utility.CreateStringArray(0)
+    endIf
+    return taken
+endFunction
