@@ -989,6 +989,7 @@ function LivingWorldRegisterActions()
     RegisterForModEvent("MantellaConversation_Advanced_Action_mantella_lw_npc_orderdrinks", "OnLwOrderDrinksAdvanced")
     RegisterForModEvent("MantellaConversation_Action_mantella_lw_npc_orderdrinks", "OnLwOrderDrinksBasic")
     RegisterForModEvent("MantellaLivingWorld_OrderOne", "OnLwOrderOneStarted")
+    LwRegisterUndress()
     RegisterForCrosshairRef()
     if (!_lwOrderActors)
         _lwOrderActors = new Actor[16]
@@ -1540,6 +1541,208 @@ function LwRecordPurchase(Actor buyer, Actor seller, Potion drink, int qty, int 
     string rec = LivingWorldHeader("purchase") + "|actor=" + LivingWorldActorField(buyer) + "|target=" + LivingWorldActorField(seller) + "|item=" + drink.GetName() + "|item_form=" + drink.GetFormID() + "|qty=" + qty + "|gold=" + gold + "|payer=" + payer + "|party=" + LivingWorldActorField(PlayerRef)
     rec += LivingWorldWitnesses(buyer, seller)
     LivingWorldQueue(rec)
+endFunction
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; LIVINGWORLD PATCH: undress and dress (actions)                                                     ;
+; The NPC's own choice: the server only offers Undress, and the NPC decides in conversation whether  ;
+; to use it (see livingworld/actions/undress.json in MantellaExtension). Nothing here decides that.  ;
+; Undress unequips every worn, playable armor and clothing item (weapons stay; nothing leaves the    ;
+; inventory, unlike RemoveAllItems) and remembers what it took off. If the NPC's AI puts something    ;
+; back on, it comes off again for LivingWorldUndressHoldSeconds, until Dress, combat or death.        ;
+; Dress puts the remembered items back on. Both queue an attire record with via=action, so the       ;
+; server remembers it as the NPC's choice and witnesses within sight remember seeing it.             ;
+; Children are never undressed (LivingWorldIsPerson).                                                ;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+float property LivingWorldUndressHoldSeconds = 600.0 auto hidden
+int LwUndressItemsPerNpc = 16   ; items remembered per NPC; 8 NPCs x 16 = the 128 of _lwUndressItems
+
+Actor[] _lwUndressed        ; one slot per undressed NPC
+int[] _lwUndressOrder       ; a new Undress or Dress for the same NPC changes it, ending the hold loop
+Form[] _lwUndressItems      ; slot * LwUndressItemsPerNpc .. + LwUndressItemsPerNpc - 1
+int _lwUndressCounter
+
+function LwRegisterUndress()
+    RegisterForModEvent("MantellaConversation_Advanced_Action_mantella_lw_npc_undress", "OnLwUndressAdvanced")
+    RegisterForModEvent("MantellaConversation_Action_mantella_lw_npc_undress", "OnLwUndressBasic")
+    RegisterForModEvent("MantellaConversation_Advanced_Action_mantella_lw_npc_dress", "OnLwDressAdvanced")
+    RegisterForModEvent("MantellaConversation_Action_mantella_lw_npc_dress", "OnLwDressBasic")
+    RegisterForModEvent("MantellaLivingWorld_UndressHold", "OnLwUndressHoldStarted")
+    if (!_lwUndressed)
+        _lwUndressed = new Actor[8]
+        _lwUndressOrder = new int[8]
+        _lwUndressItems = new Form[128]
+    endIf
+endFunction
+
+Actor function LwSingleSource(Form speaker, Form conversationQuest, int argumentsHandle)
+    MantellaConversation conv = conversationQuest as MantellaConversation
+    Actor npc = None
+    if (conv)
+        npc = conv.GetActorByName(SKSE_HTTP.getString(argumentsHandle, "source"))
+    endIf
+    if (!npc)
+        npc = speaker as Actor
+    endIf
+    return npc
+endFunction
+
+Event OnLwUndressAdvanced(Form speaker, Form conversationQuest, int argumentsHandle)
+    LwUndress(LwSingleSource(speaker, conversationQuest, argumentsHandle))
+EndEvent
+
+Event OnLwUndressBasic(Form speaker)
+    LwUndress(speaker as Actor)
+EndEvent
+
+Event OnLwDressAdvanced(Form speaker, Form conversationQuest, int argumentsHandle)
+    LwDress(LwSingleSource(speaker, conversationQuest, argumentsHandle))
+EndEvent
+
+Event OnLwDressBasic(Form speaker)
+    LwDress(speaker as Actor)
+EndEvent
+
+; the NPC's slot, claiming a free (or the oldest) one if they have none
+int function LwUndressSlot(Actor npc, bool claim)
+    int slot = _lwUndressed.Find(npc)
+    if (slot >= 0 || !claim)
+        return slot
+    endIf
+    slot = _lwUndressed.Find(None)
+    if (slot < 0)
+        _lwUndressCounter += 1
+        slot = _lwUndressCounter % _lwUndressed.Length
+    endIf
+    _lwUndressed[slot] = npc
+    int i = 0
+    while (i < LwUndressItemsPerNpc)
+        _lwUndressItems[slot * LwUndressItemsPerNpc + i] = None
+        i += 1
+    endWhile
+    return slot
+endFunction
+
+; Armor the NPC wears that Undress takes off: playable items only, so skins and body overlays stay.
+bool function LwTakesOff(Armor item)
+    return item && item.IsPlayable()
+endFunction
+
+function LwUndress(Actor npc)
+    if (!npc || npc == PlayerRef || !LivingWorldIsPerson(npc))
+        return   ; never the player, never children
+    endIf
+    if (!_lwUndressed)
+        LwRegisterUndress()
+    endIf
+    int slot = LwUndressSlot(npc, true)
+    int base = slot * LwUndressItemsPerNpc
+    int stored = 0
+    while (stored < LwUndressItemsPerNpc && _lwUndressItems[base + stored])
+        stored += 1   ; undressing again: keep what was remembered the first time
+    endWhile
+    int bit = 0
+    while (bit < 32)
+        Armor item = npc.GetWornForm(Math.LeftShift(1, bit)) as Armor
+        if (LwTakesOff(item))
+            if (stored < LwUndressItemsPerNpc && LwUndressFind(base, item) < 0)
+                _lwUndressItems[base + stored] = item
+                stored += 1
+            endIf
+            npc.UnequipItem(item, false, true)
+        endIf
+        bit += 1
+    endWhile
+    _lwUndressCounter += 1
+    _lwUndressOrder[slot] = _lwUndressCounter
+    Utility.Wait(0.5)
+    LivingWorldQueue(LivingWorldAttireRecord(npc) + "|via=action")
+    ListenerScript.AddIngameEventToConversation(npc.GetDisplayName() + " took off their clothes, down to their underclothes.")
+    int handle = ModEvent.Create("MantellaLivingWorld_UndressHold")
+    if (handle)
+        ModEvent.PushForm(handle, npc)
+        ModEvent.PushInt(handle, _lwUndressCounter)
+        ModEvent.Send(handle)
+    endIf
+endFunction
+
+int function LwUndressFind(int base, Form item)
+    int i = 0
+    while (i < LwUndressItemsPerNpc)
+        if (_lwUndressItems[base + i] == item)
+            return i
+        endIf
+        i += 1
+    endWhile
+    return -1
+endFunction
+
+bool function LwUndressStands(Actor npc, int orderId)
+    int slot = _lwUndressed.Find(npc)
+    return slot >= 0 && _lwUndressOrder[slot] == orderId && !npc.IsDead() && !npc.IsInCombat()
+endFunction
+
+Event OnLwUndressHoldStarted(Form npcForm, int orderId)
+    Actor npc = npcForm as Actor
+    if (!npc)
+        return
+    endIf
+    ; NPC AI re-equips its outfit now and then: take the same items off again while the choice stands
+    float until = Utility.GetCurrentRealTime() + LivingWorldUndressHoldSeconds
+    while (LwUndressStands(npc, orderId) && Utility.GetCurrentRealTime() < until)
+        Utility.Wait(3.0)
+        int slot = _lwUndressed.Find(npc)
+        if (slot >= 0 && LwUndressStands(npc, orderId))
+            int base = slot * LwUndressItemsPerNpc
+            int i = 0
+            while (i < LwUndressItemsPerNpc)
+                Armor item = _lwUndressItems[base + i] as Armor
+                if (item && npc.IsEquipped(item))
+                    npc.UnequipItem(item, false, true)
+                endIf
+                i += 1
+            endWhile
+        endIf
+    endWhile
+EndEvent
+
+function LwDress(Actor npc)
+    if (!npc || npc == PlayerRef || !LivingWorldIsPerson(npc))
+        return
+    endIf
+    if (!_lwUndressed)
+        LwRegisterUndress()
+    endIf
+    int slot = _lwUndressed.Find(npc)
+    bool any = false
+    if (slot >= 0)
+        _lwUndressCounter += 1
+        _lwUndressOrder[slot] = _lwUndressCounter   ; ends the hold loop
+        int base = slot * LwUndressItemsPerNpc
+        int i = 0
+        while (i < LwUndressItemsPerNpc)
+            Form item = _lwUndressItems[base + i]
+            if (item && npc.GetItemCount(item) > 0)
+                npc.EquipItem(item, false, true)
+                any = true
+            endIf
+            _lwUndressItems[base + i] = None
+            i += 1
+        endWhile
+        _lwUndressed[slot] = None
+        _lwUndressOrder[slot] = 0
+    endIf
+    if (!any)
+        ; nothing remembered (or it was given away): let their own outfit dress them
+        Outfit usual = npc.GetActorBase().GetOutfit()
+        if (usual)
+            npc.SetOutfit(usual)
+        endIf
+    endIf
+    Utility.Wait(0.5)
+    LivingWorldQueue(LivingWorldAttireRecord(npc) + "|via=action")
+    ListenerScript.AddIngameEventToConversation(npc.GetDisplayName() + " got dressed again.")
 endFunction
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
