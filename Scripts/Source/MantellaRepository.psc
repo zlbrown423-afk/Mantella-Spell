@@ -734,6 +734,9 @@ function LivingWorldRegisterActions()
     RegisterForModEvent("MantellaConversation_Action_mantella_lw_npc_gothere", "OnLwGoThereBasic")
     RegisterForModEvent("MantellaLivingWorld_SitOne", "OnLwSitOneStarted")
     RegisterForModEvent("MantellaLivingWorld_GoOne", "OnLwGoOneStarted")
+    RegisterForModEvent("MantellaConversation_Advanced_Action_mantella_lw_npc_orderdrinks", "OnLwOrderDrinksAdvanced")
+    RegisterForModEvent("MantellaConversation_Action_mantella_lw_npc_orderdrinks", "OnLwOrderDrinksBasic")
+    RegisterForModEvent("MantellaLivingWorld_OrderOne", "OnLwOrderOneStarted")
     RegisterForCrosshairRef()
     if (!_lwOrderActors)
         _lwOrderActors = new Actor[16]
@@ -749,7 +752,15 @@ Event OnCrosshairRefChange(ObjectReference ref)
 EndEvent
 
 function LwNotePointed(ObjectReference ref)
-    if (!ref || (ref as Actor))
+    if (!ref)
+        return
+    endIf
+    Actor person = ref as Actor
+    if (person)
+        if (LwCouldBeBartender(person))
+            _lwPointedPerson = person
+            _lwPointedPersonTime = Utility.GetCurrentRealTime()
+        endIf
         return
     endIf
     float now = Utility.GetCurrentRealTime()
@@ -1093,4 +1104,188 @@ function LwGoAndHold(Actor npc, ObjectReference target, int orderId)
         endIf
     endWhile
     LwEndOrder(npc, orderId)
+endFunction
+
+; ---- order drinks from the bar ----
+; The NPC walks to the bartender (named by the LLM, else the person the player last pointed at), buys a
+; round of two, walks back and hands one to the player. The drink comes from the bartender's own
+; inventory, else is the same kind as a bottle standing in the cell (inns have them on the tables), so no
+; form IDs are hard-coded. Price: the drink's base value each. The payer is the player (default) or the
+; NPC; if they cannot afford it the NPC comes back empty-handed. Queues a purchase perception record.
+
+Actor _lwPointedPerson     ; last person the crosshair rested on (for "get drinks from her")
+float _lwPointedPersonTime
+
+Event OnLwOrderDrinksAdvanced(Form speaker, Form conversationQuest, int argumentsHandle)
+    MantellaConversation conv = conversationQuest as MantellaConversation
+    Actor npc = conv.GetActorByName(SKSE_HTTP.getString(argumentsHandle, "source", ""))
+    if (!npc)
+        npc = speaker as Actor
+    endIf
+    string bartenderName = SKSE_HTTP.getString(argumentsHandle, "bartender", "")
+    Actor bartender = None
+    if (bartenderName != "")
+        bartender = conv.GetActorByName(bartenderName)
+    endIf
+    LwOrderDrinks(npc, bartender, SKSE_HTTP.getString(argumentsHandle, "drink", ""), SKSE_HTTP.getString(argumentsHandle, "payer", "player"))
+EndEvent
+
+Event OnLwOrderDrinksBasic(Form speaker)
+    LwOrderDrinks(speaker as Actor, None, "", "player")
+EndEvent
+
+function LwOrderDrinks(Actor npc, Actor bartender, string wanted, string payer)
+    if (!npc || npc == PlayerRef)
+        return
+    endIf
+    if (!bartender)
+        bartender = LwPointedPerson()
+    endIf
+    if (!bartender || bartender == npc || bartender == PlayerRef || bartender.IsDead())
+        ListenerScript.AddIngameEventToConversation(npc.GetDisplayName() + " did not know who to ask for drinks. (Say the bartender's name, or point at them.)")
+        return
+    endIf
+    if (wanted == "")
+        wanted = "mead"
+    endIf
+    if (payer != "npc")
+        payer = "player"
+    endIf
+    int orderId = LwNewOrder(npc)
+    Debug.Notification(npc.GetDisplayName() + " goes to the bar.")
+    int handle = ModEvent.Create("MantellaLivingWorld_OrderOne")
+    if (handle)
+        ModEvent.PushForm(handle, npc)
+        ModEvent.PushForm(handle, bartender)
+        ModEvent.PushString(handle, wanted)
+        ModEvent.PushString(handle, payer)
+        ModEvent.PushInt(handle, orderId)
+        ModEvent.Send(handle)
+    endIf
+endFunction
+
+Event OnLwOrderOneStarted(Form npcForm, Form bartenderForm, string wanted, string payer, int orderId)
+    LwFetchRound(npcForm as Actor, bartenderForm as Actor, wanted, payer, orderId)
+EndEvent
+
+Actor function LwPointedPerson()
+    Actor now = Game.GetCurrentCrosshairRef() as Actor
+    if (LwCouldBeBartender(now))
+        return now
+    endIf
+    if (_lwPointedPerson && Utility.GetCurrentRealTime() - _lwPointedPersonTime <= LivingWorldPointMemorySeconds)
+        return _lwPointedPerson
+    endIf
+    return None
+endFunction
+
+; The people in the conversation are the ones ordering, not the bartender.
+bool function LwCouldBeBartender(Actor a)
+    return a && a != PlayerRef && !a.IsDead() && !ListenerScript.conversation.Participants.HasForm(a)
+endFunction
+
+function LwFetchRound(Actor npc, Actor bartender, string wanted, string payer, int orderId)
+    if (!npc || !bartender)
+        return
+    endIf
+    bool wasWaiting = LwPauseFollowerWait(npc)
+    npc.PathToReference(bartender, 1.0)
+    if (!LwOrderStands(npc, orderId))
+        LwRestoreWait(npc, wasWaiting)
+        return
+    endIf
+    string npcName = npc.GetDisplayName()
+    Potion drink = LwRoundDrink(bartender, wanted)
+    if (!drink)
+        npc.PathToReference(PlayerRef, 1.0)
+        LwRestoreWait(npc, wasWaiting)
+        LwEndOrder(npc, orderId)
+        ListenerScript.AddIngameEventToConversation(npcName + " came back from the bar empty-handed: " + bartender.GetDisplayName() + " had no " + wanted + ".")
+        return
+    endIf
+    int each = drink.GetGoldValue()
+    if (each < 1)
+        each = 1
+    endIf
+    int total = each * 2
+    Form gold = Game.GetFormFromFile(0x0000000F, "Skyrim.esm")   ; Gold001
+    Actor payingActor = PlayerRef
+    if (payer == "npc")
+        payingActor = npc
+    endIf
+    if (payingActor.GetItemCount(gold) < total)
+        npc.PathToReference(PlayerRef, 1.0)
+        LwRestoreWait(npc, wasWaiting)
+        LwEndOrder(npc, orderId)
+        ListenerScript.AddIngameEventToConversation(npcName + " came back from the bar empty-handed: " + payingActor.GetDisplayName() + " did not have the " + total + " gold for two " + drink.GetName() + ".")
+        return
+    endIf
+    payingActor.RemoveItem(gold, total, true, bartender)
+    ; take the bartender's own bottles first, then the rest of the round
+    int fromBar = bartender.GetItemCount(drink)
+    if (fromBar > 2)
+        fromBar = 2
+    endIf
+    if (fromBar > 0)
+        bartender.RemoveItem(drink, fromBar, true, npc)
+    endIf
+    if (fromBar < 2)
+        npc.AddItem(drink, 2 - fromBar, true)
+    endIf
+    LwRecordPurchase(npc, bartender, drink, 2, total, payer)
+    Debug.Notification(npcName + " buys two " + drink.GetName() + ".")
+    npc.PathToReference(PlayerRef, 1.0)
+    LwRestoreWait(npc, wasWaiting)
+    LwEndOrder(npc, orderId)
+    if (npc.GetItemCount(drink) > 0)
+        npc.RemoveItem(drink, 1, false, PlayerRef)   ; not silent: the player sees the drink arrive
+    endIf
+    string paidBy = "on " + PlayerRef.GetDisplayName() + "'s gold"
+    if (payer == "npc")
+        paidBy = "as " + npcName + "'s treat"
+    endIf
+    ListenerScript.AddIngameEventToConversation(npcName + " came back from the bar with two " + drink.GetName() + " (" + total + " gold, " + paidBy + ") and handed one to " + PlayerRef.GetDisplayName() + ".")
+endFunction
+
+function LwRestoreWait(Actor npc, bool wasWaiting)
+    if (wasWaiting)
+        npc.SetActorValue("WaitingForPlayer", 1)
+    endIf
+endFunction
+
+; The drink to buy: from the bartender's inventory, else the kind of a matching bottle in the cell.
+Potion function LwRoundDrink(Actor bartender, string wanted)
+    int n = bartender.GetNumItems()
+    int i = 0
+    while (i < n)
+        Potion p = bartender.GetNthForm(i) as Potion
+        if (p && p.IsFood() && !p.IsPoison() && StringUtil.Find(p.GetName(), wanted) >= 0 && LivingWorldIsAlcohol(p.GetName()))
+            return p
+        endIf
+        i += 1
+    endWhile
+    Cell c = bartender.GetParentCell()
+    if (!c)
+        return None
+    endIf
+    n = c.GetNumRefs(46)   ; kAlchemy: potions, food and drink placed in the world
+    i = 0
+    while (i < n)
+        ObjectReference ref = c.GetNthRef(i, 46)
+        Potion p = None
+        if (ref)
+            p = ref.GetBaseObject() as Potion
+        endIf
+        if (p && p.IsFood() && !p.IsPoison() && StringUtil.Find(p.GetName(), wanted) >= 0 && LivingWorldIsAlcohol(p.GetName()))
+            return p
+        endIf
+        i += 1
+    endWhile
+    return None
+endFunction
+
+function LwRecordPurchase(Actor buyer, Actor seller, Potion drink, int qty, int gold, string payer)
+    string rec = LivingWorldHeader("purchase") + "|actor=" + LivingWorldActorField(buyer) + "|target=" + LivingWorldActorField(seller) + "|item=" + drink.GetName() + "|item_form=" + drink.GetFormID() + "|qty=" + qty + "|gold=" + gold + "|payer=" + payer + "|party=" + LivingWorldActorField(PlayerRef)
+    rec += LivingWorldWitnesses(buyer, seller)
+    LivingWorldQueue(rec)
 endFunction
