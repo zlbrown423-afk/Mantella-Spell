@@ -363,6 +363,7 @@ function LivingWorldRegisterPerception()
     else
         Debug.Trace("Mantella Living World: HIGGS not found; grab perception is off")
     endIf
+    LivingWorldRegisterAttireAndDrink()
     LivingWorldRegisterActions()
 endFunction
 
@@ -536,8 +537,169 @@ string[] function LivingWorldTakeEvents()
     return taken
 endFunction
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; LIVINGWORLD PATCH: clothing awareness and drinking                                                 ;
+; Attire: what each nearby person wears in the body slot (32), sent with every request under        ;
+; mantella_lw_attire, plus a queued record when the player takes off or puts on body clothing.       ;
+; Drink: the Living World Drink action (data/actions/livingworld_drink.json in MantellaExtension).    ;
+; The NPC drinks an alcoholic drink from their own inventory and it is recorded like any other       ;
+; consume event (via=action). The server counts drinks; this script never decides anything with it. ;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-; LIVINGWORLD PATCH: actions (sit, stand up, go there, drink)                                        ;
+
+bool property LivingWorldAttireOn = true auto hidden
+int property LivingWorldBodySlotMask = 0x00000004 auto hidden   ; slot 32 (body)
+
+bool _lwPlayerCovered = true
+Keyword _lwActorTypeNPC
+
+; Called from LivingWorldRegisterPerception on every load.
+function LivingWorldRegisterAttireAndDrink()
+    _lwActorTypeNPC = Keyword.GetKeyword("ActorTypeNPC")
+    _lwPlayerCovered = PlayerRef.GetWornForm(LivingWorldBodySlotMask) != None
+    RegisterForModEvent("MantellaConversation_Advanced_Action_mantella_npc_lw_drink", "OnLivingWorldDrinkAdvanced")
+    RegisterForModEvent("MantellaConversation_Action_mantella_npc_lw_drink", "OnLivingWorldDrinkLegacy")
+endFunction
+
+; "clothing", "armor" or "none" for what the actor wears in the body slot
+string function LivingWorldCover(Actor a)
+    Armor body = a.GetWornForm(LivingWorldBodySlotMask) as Armor
+    if (!body)
+        return "none"
+    elseIf (body.GetWeightClass() == 2)
+        return "clothing"
+    endIf
+    return "armor"
+endFunction
+
+string function LivingWorldAttireRecord(Actor a)
+    string cover = LivingWorldCover(a)
+    string bodyName = ""
+    Form body = a.GetWornForm(LivingWorldBodySlotMask)
+    if (body)
+        bodyName = body.GetName()
+    endIf
+    string rec = LivingWorldHeader("attire") + "|actor=" + LivingWorldActorField(a) + "|body=" + bodyName + "|cover=" + cover
+    if (cover == "none")
+        rec += LivingWorldWitnesses(a, None)   ; who could see them: only worked out when it matters
+    endIf
+    return rec
+endFunction
+
+bool function LivingWorldIsPerson(Actor a)
+    return a && !a.IsDead() && (!_lwActorTypeNPC || a.HasKeyword(_lwActorTypeNPC))
+endFunction
+
+; One attire record each for the player, the conversation's participants and the nearby people.
+; MantellaConversation.BuildContext sends this with every request.
+string[] function LivingWorldAttireSnapshot()
+    if (!LivingWorldAttireOn)
+        return Utility.CreateStringArray(0)
+    endIf
+    Actor[] nearby = ListenerScript.ScanNearbyActors()
+    FormList participants = ListenerScript.conversation.Participants
+    int total = 1 + participants.GetSize() + nearby.Length
+    Actor[] done = new Actor[30]
+    int doneCount = 0
+    string[] result = Utility.CreateStringArray(0)
+    int i = 0
+    while (i < total && doneCount < 30)
+        Actor a
+        if (i == 0)
+            a = PlayerRef
+        elseIf (i <= participants.GetSize())
+            a = participants.GetAt(i - 1) as Actor
+        else
+            a = nearby[i - 1 - participants.GetSize()]
+        endIf
+        if (LivingWorldIsPerson(a) && done.Find(a) < 0 && a.GetDistance(PlayerRef) / 71.0210 <= LivingWorldWitnessScanMeters)
+            done[doneCount] = a
+            doneCount += 1
+            result = Utility.ResizeStringArray(result, result.Length + 1)
+            result[result.Length - 1] = LivingWorldAttireRecord(a)
+        endIf
+        i += 1
+    endWhile
+    return result
+endFunction
+
+; Called by MantellaListenerScript when the player equips or unequips anything. Checks a moment later,
+; so swapping one outfit for another does not count as undressing.
+function LivingWorldPlayerAttireMaybeChanged(Form item)
+    Armor worn = item as Armor
+    if (!LivingWorldAttireOn || !worn || Math.LogicalAnd(worn.GetSlotMask(), LivingWorldBodySlotMask) == 0)
+        return
+    endIf
+    RegisterForSingleUpdate(1.0)
+endFunction
+
+Event OnUpdate()
+    bool covered = PlayerRef.GetWornForm(LivingWorldBodySlotMask) != None
+    if (covered != _lwPlayerCovered)
+        _lwPlayerCovered = covered
+        LivingWorldQueue(LivingWorldAttireRecord(PlayerRef))
+    endIf
+EndEvent
+
+event OnLivingWorldDrinkAdvanced(Form speaker, Form conversationQuest, int argumentsHandle)
+    MantellaConversation conv = conversationQuest as MantellaConversation
+    string sourceName = SKSE_HTTP.getString(argumentsHandle, "source")
+    Actor drinker = conv.GetActorByName(sourceName)
+    if (!drinker)
+        drinker = speaker as Actor
+    endIf
+    LivingWorldDrink(drinker)
+endEvent
+
+event OnLivingWorldDrinkLegacy(Form speaker)
+    LivingWorldDrink(speaker as Actor)
+endEvent
+
+bool function LivingWorldIsAlcohol(string itemName)
+    string[] names = new string[8]
+    names[0] = "ale"
+    names[1] = "mead"
+    names[2] = "wine"
+    names[3] = "sujamma"
+    names[4] = "flin"
+    names[5] = "brandy"
+    names[6] = "shein"
+    names[7] = "matze"
+    int i = 0
+    while (i < names.Length)
+        if (StringUtil.Find(itemName, names[i]) >= 0)
+            return true
+        endIf
+        i += 1
+    endWhile
+    return false
+endFunction
+
+; The NPC drinks one alcoholic drink from their own inventory.
+function LivingWorldDrink(Actor drinker)
+    if (!drinker || drinker == PlayerRef)
+        return
+    endIf
+    Potion drink = None
+    int i = 0
+    int count = drinker.GetNumItems()
+    while (i < count && !drink)
+        Potion p = drinker.GetNthForm(i) as Potion
+        if (p && p.IsFood() && !p.IsPoison() && LivingWorldIsAlcohol(p.GetName()))
+            drink = p
+        endIf
+        i += 1
+    endWhile
+    if (!drink)
+        ListenerScript.AddIngameEventToConversation(drinker.GetDisplayName() + " reached for a drink but had none.")
+        return
+    endIf
+    drinker.EquipItem(drink, false, true)   ; an NPC equipping a potion drinks it
+    LivingWorldConsumed(drinker, drink, "action")
+    ListenerScript.AddIngameEventToConversation(drinker.GetDisplayName() + " drank a " + drink.GetName() + ".")
+endFunction
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; LIVINGWORLD PATCH: actions (sit, stand up, go there)                                              ;
 ; The Living World server offers these to the LLM only when MANTELLA_LIVING_WORLD=1 (see             ;
 ; livingworld/actions/ in MantellaExtension), so without it these handlers never fire.               ;
 ; Each action arrives in two forms, like Mantella's own: the advanced one (tool call with arguments) ;
@@ -570,8 +732,6 @@ function LivingWorldRegisterActions()
     RegisterForModEvent("MantellaConversation_Action_mantella_lw_npc_standup", "OnLwStandUpBasic")
     RegisterForModEvent("MantellaConversation_Advanced_Action_mantella_lw_npc_gothere", "OnLwGoThereAdvanced")
     RegisterForModEvent("MantellaConversation_Action_mantella_lw_npc_gothere", "OnLwGoThereBasic")
-    RegisterForModEvent("MantellaConversation_Advanced_Action_mantella_lw_npc_drink", "OnLwDrinkAdvanced")
-    RegisterForModEvent("MantellaConversation_Action_mantella_lw_npc_drink", "OnLwDrinkBasic")
     RegisterForModEvent("MantellaLivingWorld_SitOne", "OnLwSitOneStarted")
     RegisterForModEvent("MantellaLivingWorld_GoOne", "OnLwGoOneStarted")
     RegisterForCrosshairRef()
@@ -659,20 +819,6 @@ EndEvent
 
 Event OnLwGoThereBasic(Form speaker)
     LwGoThere(speaker as Actor)
-EndEvent
-
-Event OnLwDrinkAdvanced(Form speaker, Form conversationQuest, int argumentsHandle)
-    string wanted = SKSE_HTTP.getString(argumentsHandle, "drink", "")
-    Actor[] npcs = LwSources(conversationQuest, argumentsHandle)
-    int i = 0
-    while (i < npcs.Length)
-        LwDrink(npcs[i], wanted)
-        i += 1
-    endWhile
-EndEvent
-
-Event OnLwDrinkBasic(Form speaker)
-    LwDrink(speaker as Actor, "")
 EndEvent
 
 Actor[] function LwSources(Form conversationQuest, int argumentsHandle)
@@ -947,69 +1093,4 @@ function LwGoAndHold(Actor npc, ObjectReference target, int orderId)
         endIf
     endWhile
     LwEndOrder(npc, orderId)
-endFunction
-
-; ---- drink ----
-; Drinks come from the NPC's own inventory, which includes anything the player gave them (Inventory action
-; or vanilla trade). Recorded as a consume perception event (via=npc_action), so witnesses remember it and
-; the server counts it like the player's own drinks.
-
-Potion function LwFindDrink(Actor npc, string wanted)
-    Potion fallback = None
-    int n = npc.GetNumItems()
-    int i = 0
-    while (i < n)
-        Potion p = npc.GetNthForm(i) as Potion
-        if (p && !p.IsPoison())
-            string name = p.GetName()
-            if (wanted != "")
-                if (StringUtil.Find(name, wanted) >= 0)
-                    return p
-                endIf
-            elseIf (p.IsFood() && LwIsDrinkName(name))
-                ; offered "a drink" in a tavern: ale or mead before water or milk
-                if (LwIsAlcoholName(name))
-                    return p
-                elseIf (!fallback)
-                    fallback = p
-                endIf
-            endIf
-        endIf
-        i += 1
-    endWhile
-    return fallback
-endFunction
-
-; Same names as livingworld/perception/records.py ALCOHOL_NAMES (minus skooma: not offered as a social drink).
-; DRINK_WORDS' "tea" is left out here: as a substring it matches "Steak" and "Steamed".
-bool function LwIsAlcoholName(string name)
-    return StringUtil.Find(name, "ale") >= 0 || StringUtil.Find(name, "mead") >= 0 || StringUtil.Find(name, "wine") >= 0 || StringUtil.Find(name, "sujamma") >= 0 || StringUtil.Find(name, "flin") >= 0 || StringUtil.Find(name, "brandy") >= 0 || StringUtil.Find(name, "shein") >= 0 || StringUtil.Find(name, "matze") >= 0
-endFunction
-
-bool function LwIsDrinkName(string name)
-    return LwIsAlcoholName(name) || StringUtil.Find(name, "milk") >= 0 || StringUtil.Find(name, "water") >= 0 || StringUtil.Find(name, "juice") >= 0 || StringUtil.Find(name, "drink") >= 0
-endFunction
-
-function LwDrink(Actor npc, string wanted)
-    if (!npc || npc == PlayerRef)
-        return
-    endIf
-    Potion p = LwFindDrink(npc, wanted)
-    if (!p)
-        string what = "anything to drink"
-        if (wanted != "")
-            what = "any " + wanted
-        endIf
-        ListenerScript.AddIngameEventToConversation(npc.GetDisplayName() + " did not have " + what + ".")
-        return
-    endIf
-    Idle drinkIdle = Game.GetFormFromFile(0x000D33B0, "Skyrim.esm") as Idle   ; IdleDrinkPotion
-    if (drinkIdle && !LwIsSeated(npc))
-        npc.PlayIdle(drinkIdle)
-        Utility.Wait(1.5)
-    endIf
-    npc.EquipItem(p, false, true)   ; an actor "equipping" a potion drinks it
-    Debug.Notification(npc.GetDisplayName() + " drinks some " + p.GetName() + ".")
-    LivingWorldConsumed(npc, p, "npc_action")
-    ListenerScript.AddIngameEventToConversation(npc.GetDisplayName() + " drank some " + p.GetName() + ".")
 endFunction
