@@ -348,6 +348,11 @@ float _lwLeftSince
 float _lwRightSince
 string _lwLeftNode
 string _lwRightNode
+string _lwLeftArea
+string _lwRightArea
+float _lwPx
+float _lwPy
+float _lwPz
 Form _lwLastMouthForm
 float _lwLastMouthTime
 
@@ -374,22 +379,25 @@ Event OnObjectGrabbed(ObjectReference akRef, bool abIsLeft)
         return
     endIf
     string node = HiggsVR.GetGrabbedNodeName(abIsLeft)
+    string area = LivingWorldGrabArea(target, abIsLeft)
     float now = Utility.GetCurrentRealTime()
     ; a hand that grabs again without a drop event: close the previous grab first
     if (abIsLeft)
         if (_lwLeftHeld)
-            LivingWorldRecordGrab(_lwLeftHeld, _lwLeftNode, "L", now - _lwLeftSince)
+            LivingWorldRecordGrab(_lwLeftHeld, _lwLeftNode, _lwLeftArea, "L", now - _lwLeftSince)
         endIf
         _lwLeftHeld = target
         _lwLeftSince = now
         _lwLeftNode = node
+        _lwLeftArea = area
     else
         if (_lwRightHeld)
-            LivingWorldRecordGrab(_lwRightHeld, _lwRightNode, "R", now - _lwRightSince)
+            LivingWorldRecordGrab(_lwRightHeld, _lwRightNode, _lwRightArea, "R", now - _lwRightSince)
         endIf
         _lwRightHeld = target
         _lwRightSince = now
         _lwRightNode = node
+        _lwRightArea = area
     endIf
 EndEvent
 
@@ -401,10 +409,10 @@ Event OnObjectDropped(ObjectReference akRef, bool abIsLeft)
     float now = Utility.GetCurrentRealTime()
     if (abIsLeft && _lwLeftHeld == target)
         _lwLeftHeld = None
-        LivingWorldRecordGrab(target, _lwLeftNode, "L", now - _lwLeftSince)
+        LivingWorldRecordGrab(target, _lwLeftNode, _lwLeftArea, "L", now - _lwLeftSince)
     elseIf (!abIsLeft && _lwRightHeld == target)
         _lwRightHeld = None
-        LivingWorldRecordGrab(target, _lwRightNode, "R", now - _lwRightSince)
+        LivingWorldRecordGrab(target, _lwRightNode, _lwRightArea, "R", now - _lwRightSince)
     endIf
 EndEvent
 
@@ -433,16 +441,257 @@ function LivingWorldConsumed(Actor consumer, Form item, string via)
     LivingWorldQueue(rec)
 endFunction
 
-function LivingWorldRecordGrab(Actor target, string node, string hand, float seconds)
-    string rec = LivingWorldHeader("grab") + "|actor=" + LivingWorldActorField(PlayerRef) + "|target=" + LivingWorldActorField(target) + "|node=" + node + "|hand=" + hand + "|dur=" + seconds + "|trank=" + target.GetRelationshipRank(PlayerRef)
+function LivingWorldRecordGrab(Actor target, string node, string area, string hand, float seconds)
+    string rec = LivingWorldHeader("grab") + "|actor=" + LivingWorldActorField(PlayerRef) + "|target=" + LivingWorldActorField(target) + "|node=" + node + "|area=" + area + "|hand=" + hand + "|dur=" + seconds + "|trank=" + target.GetRelationshipRank(PlayerRef)
     rec += LivingWorldWitnesses(PlayerRef, target)
     LivingWorldQueue(rec)
-    ; let a running conversation react straight away, as Mantella's own events do
-    string part = node
+    ; let a running conversation react straight away, as Mantella's own events do.
+    ; Never the raw node name: "NPC Spine1 [Spn1]" made NPCs say they were grabbed by the spine.
+    string part = area
     if (part == "")
         part = "body"
     endIf
-    ListenerScript.AddIngameEventToConversation(PlayerRef.GetDisplayName() + " grabbed " + target.GetDisplayName() + " (" + part + ") for " + (seconds as int) + " seconds.")
+    ListenerScript.AddIngameEventToConversation(PlayerRef.GetDisplayName() + " grabbed " + target.GetDisplayName() + " by the " + part + " for " + (seconds as int) + " seconds.")
+endFunction
+
+; Where on the body the player's hand is: "left shoulder", "upper back", "stomach", "right thigh" ...
+; HIGGS only names the ragdoll body it holds, and Skyrim's ragdoll has a few large spine bodies for the
+; whole torso, so a hand on the shoulder, the waist, the chest or the back all came back as a spine.
+; Instead: take the hand's position (first-person skeleton, which follows the VR controller), find the
+; nearest bone segment of the NPC's skeleton, and for the torso tell front, back and side from the way
+; the NPC faces. Returns "" when it cannot tell; the server then falls back to the node name.
+string function LivingWorldGrabArea(Actor target, bool abIsLeft)
+    if (!target.Is3DLoaded())
+        return ""
+    endIf
+    string handNode = "NPC R Hand [RHnd]"
+    string fingerNode = "NPC R Finger20 [RF20]"
+    if (abIsLeft)
+        handNode = "NPC L Hand [LHnd]"
+        fingerNode = "NPC L Finger20 [LF20]"
+    endIf
+    if (!NetImmerse.HasNode(PlayerRef, handNode, true))
+        return ""
+    endIf
+    float hx = NetImmerse.GetNodeWorldPositionX(PlayerRef, handNode, true)
+    float hy = NetImmerse.GetNodeWorldPositionY(PlayerRef, handNode, true)
+    float hz = NetImmerse.GetNodeWorldPositionZ(PlayerRef, handNode, true)
+    ; the hand node sits at the wrist: move to the palm, halfway to the middle finger
+    if (NetImmerse.HasNode(PlayerRef, fingerNode, true))
+        hx = (hx + NetImmerse.GetNodeWorldPositionX(PlayerRef, fingerNode, true)) / 2.0
+        hy = (hy + NetImmerse.GetNodeWorldPositionY(PlayerRef, fingerNode, true)) / 2.0
+        hz = (hz + NetImmerse.GetNodeWorldPositionZ(PlayerRef, fingerNode, true)) / 2.0
+    endIf
+
+    string[] nodes = new string[20]
+    nodes[0] = "NPC Pelvis [Pelv]"
+    nodes[1] = "NPC Spine [Spn0]"
+    nodes[2] = "NPC Spine1 [Spn1]"
+    nodes[3] = "NPC Spine2 [Spn2]"
+    nodes[4] = "NPC Neck [Neck]"
+    nodes[5] = "NPC Head [Head]"
+    nodes[6] = "NPC L Clavicle [LClv]"
+    nodes[7] = "NPC L UpperArm [LUar]"
+    nodes[8] = "NPC L Forearm [LLar]"
+    nodes[9] = "NPC L Hand [LHnd]"
+    nodes[10] = "NPC R Clavicle [RClv]"
+    nodes[11] = "NPC R UpperArm [RUar]"
+    nodes[12] = "NPC R Forearm [RLar]"
+    nodes[13] = "NPC R Hand [RHnd]"
+    nodes[14] = "NPC L Thigh [LThg]"
+    nodes[15] = "NPC L Calf [LClf]"
+    nodes[16] = "NPC L Foot [Lft ]"
+    nodes[17] = "NPC R Thigh [RThg]"
+    nodes[18] = "NPC R Calf [RClf]"
+    nodes[19] = "NPC R Foot [Rft ]"
+    float[] nx = new float[20]
+    float[] ny = new float[20]
+    float[] nz = new float[20]
+    bool[] has = new bool[20]
+    int i = 0
+    while (i < 20)
+        if (NetImmerse.HasNode(target, nodes[i], false))
+            has[i] = true
+            nx[i] = NetImmerse.GetNodeWorldPositionX(target, nodes[i], false)
+            ny[i] = NetImmerse.GetNodeWorldPositionY(target, nodes[i], false)
+            nz[i] = NetImmerse.GetNodeWorldPositionZ(target, nodes[i], false)
+        endIf
+        i += 1
+    endWhile
+
+    ; bone segments: from node, to node (-1: 18 units above the head node, -2: past the hand, -3: the
+    ; node itself), and what to call it
+    int[] sa = new int[20]
+    int[] sb = new int[20]
+    string[] sk = new string[20]
+    sa[0] = 0
+    sb[0] = 1
+    sk[0] = "pelvis"
+    sa[1] = 1
+    sb[1] = 2
+    sk[1] = "midsection"
+    sa[2] = 2
+    sb[2] = 3
+    sk[2] = "midsection"
+    sa[3] = 3
+    sb[3] = 4
+    sk[3] = "upper torso"
+    sa[4] = 4
+    sb[4] = 5
+    sk[4] = "neck"
+    sa[5] = 5
+    sb[5] = -1
+    sk[5] = "head"
+    sa[6] = 6
+    sb[6] = 7
+    sk[6] = "left shoulder"
+    sa[7] = 7
+    sb[7] = 8
+    sk[7] = "left upper arm"
+    sa[8] = 8
+    sb[8] = 9
+    sk[8] = "left forearm"
+    sa[9] = 9
+    sb[9] = -2
+    sk[9] = "left hand"
+    sa[10] = 10
+    sb[10] = 11
+    sk[10] = "right shoulder"
+    sa[11] = 11
+    sb[11] = 12
+    sk[11] = "right upper arm"
+    sa[12] = 12
+    sb[12] = 13
+    sk[12] = "right forearm"
+    sa[13] = 13
+    sb[13] = -2
+    sk[13] = "right hand"
+    sa[14] = 14
+    sb[14] = 15
+    sk[14] = "left thigh"
+    sa[15] = 15
+    sb[15] = 16
+    sk[15] = "left leg"
+    sa[16] = 16
+    sb[16] = -3
+    sk[16] = "left foot"
+    sa[17] = 17
+    sb[17] = 18
+    sk[17] = "right thigh"
+    sa[18] = 18
+    sb[18] = 19
+    sk[18] = "right leg"
+    sa[19] = 19
+    sb[19] = -3
+    sk[19] = "right foot"
+
+    int best = -1
+    float bestD2 = 2025.0     ; 45 units (about 65 cm): further than that, the hand is not on this body
+    float bestX
+    float bestY
+    float bestZ
+    i = 0
+    while (i < 20)
+        int a = sa[i]
+        int b = sb[i]
+        if (has[a] && (b < 0 || has[b]))
+            float bx = nx[a]
+            float by = ny[a]
+            float bz = nz[a]
+            if (b == -1)
+                bz += 18.0
+            elseIf (b == -2 && has[a - 1])
+                ; the hand reaches past the wrist about half a forearm
+                bx += (nx[a] - nx[a - 1]) * 0.5
+                by += (ny[a] - ny[a - 1]) * 0.5
+                bz += (nz[a] - nz[a - 1]) * 0.5
+            elseIf (b >= 0)
+                bx = nx[b]
+                by = ny[b]
+                bz = nz[b]
+            endIf
+            float d2 = LivingWorldSegmentDistance2(nx[a], ny[a], nz[a], bx, by, bz, hx, hy, hz)
+            if (d2 < bestD2)
+                bestD2 = d2
+                best = i
+                bestX = _lwPx
+                bestY = _lwPy
+                bestZ = _lwPz
+            endIf
+        endIf
+        i += 1
+    endWhile
+    if (best < 0)
+        return ""
+    endIf
+    string kind = sk[best]
+    if (best != 0 && best != 1 && best != 2 && best != 3 && best != 5)
+        return kind
+    endIf
+
+    ; torso and head: front, back or side, from where the hand is relative to the way the NPC faces
+    float angle = target.GetAngleZ()
+    float ox = hx - bestX
+    float oy = hy - bestY
+    float forward = ox * Math.Sin(angle) + oy * Math.Cos(angle)
+    float right = ox * Math.Cos(angle) - oy * Math.Sin(angle)
+    if (best == 5)
+        if (forward > 5.0)
+            return "face"
+        endIf
+        return "head"
+    endIf
+    string side = "right"
+    if (right < 0.0)
+        side = "left"
+    endIf
+    bool sideways = Math.Abs(right) > Math.Abs(forward)
+    bool front = forward >= 0.0
+    if (best == 0)
+        if (sideways)
+            return side + " hip"
+        elseIf (front)
+            return "hips"
+        endIf
+        return "backside"
+    elseIf (best == 3)
+        if (sideways)
+            return side + " side"
+        elseIf (front)
+            return "chest"
+        endIf
+        return "upper back"
+    endIf
+    if (sideways)
+        return side + " side"
+    elseIf (front)
+        return "stomach"
+    endIf
+    return "lower back"
+endFunction
+
+; Squared distance from point h to segment a-b. Leaves the closest point of the segment in _lwPx/_lwPy/_lwPz.
+float function LivingWorldSegmentDistance2(float ax, float ay, float az, float bx, float by, float bz, float hx, float hy, float hz)
+    float dx = bx - ax
+    float dy = by - ay
+    float dz = bz - az
+    float len2 = dx * dx + dy * dy + dz * dz
+    float t = 0.0
+    if (len2 > 0.0001)
+        t = ((hx - ax) * dx + (hy - ay) * dy + (hz - az) * dz) / len2
+        if (t < 0.0)
+            t = 0.0
+        elseIf (t > 1.0)
+            t = 1.0
+        endIf
+    endIf
+    _lwPx = ax + t * dx
+    _lwPy = ay + t * dy
+    _lwPz = az + t * dz
+    float ex = hx - _lwPx
+    float ey = hy - _lwPy
+    float ez = hz - _lwPz
+    return ex * ex + ey * ey + ez * ez
 endFunction
 
 string function LivingWorldHeader(string kind)
