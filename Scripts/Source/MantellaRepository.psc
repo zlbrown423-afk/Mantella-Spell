@@ -369,7 +369,8 @@ endFunction
 
 Event OnObjectGrabbed(ObjectReference akRef, bool abIsLeft)
     Actor target = akRef as Actor
-    if (!LivingWorldPerceptionOn || !target || target == PlayerRef || target.IsDead())
+    ; children are left out of Living World entirely
+    if (!LivingWorldPerceptionOn || !target || target == PlayerRef || target.IsDead() || target.IsChild())
         return
     endIf
     string node = HiggsVR.GetGrabbedNodeName(abIsLeft)
@@ -416,7 +417,7 @@ EndEvent
 ; Also called by MantellaListenerScript.OnObjectEquipped for food, drink and potions used from the inventory.
 function LivingWorldConsumed(Actor consumer, Form item, string via)
     Potion p = item as Potion
-    if (!LivingWorldPerceptionOn || !p || p.IsPoison())
+    if (!LivingWorldPerceptionOn || !p || p.IsPoison() || !consumer || consumer.IsChild())
         return
     endIf
     ; HIGGS eating also equips the item: count it once
@@ -487,7 +488,8 @@ string function LivingWorldWitnesses(Actor doer, Actor target)
         else
             w = participants.GetAt(i - count) as Actor
         endIf
-        if (w && w != doer && w != target && w != PlayerRef && !w.IsDead() && seenAlready.Find(w) < 0)
+        ; only adult people are witnesses: no animals, no creatures (the Stump, chickens), no children
+        if (w && w != doer && w != target && w != PlayerRef && LivingWorldIsPerson(w) && seenAlready.Find(w) < 0)
             seenAlready[seenCount] = w
             seenCount += 1
             float meters = w.GetDistance(center) / 71.0210
@@ -585,8 +587,9 @@ string function LivingWorldAttireRecord(Actor a)
     return rec
 endFunction
 
+; An adult, living person. Children are left out of every Living World system.
 bool function LivingWorldIsPerson(Actor a)
-    return a && !a.IsDead() && (!_lwActorTypeNPC || a.HasKeyword(_lwActorTypeNPC))
+    return a && !a.IsDead() && !a.IsChild() && (!_lwActorTypeNPC || a.HasKeyword(_lwActorTypeNPC))
 endFunction
 
 ; One attire record each for the player, the conversation's participants and the nearby people.
@@ -676,7 +679,7 @@ endFunction
 
 ; The NPC drinks one alcoholic drink from their own inventory.
 function LivingWorldDrink(Actor drinker)
-    if (!drinker || drinker == PlayerRef)
+    if (!drinker || drinker == PlayerRef || drinker.IsChild())
         return
     endIf
     Potion drink = None
@@ -1135,7 +1138,7 @@ Event OnLwOrderDrinksBasic(Form speaker)
 EndEvent
 
 function LwOrderDrinks(Actor npc, Actor bartender, string wanted, string payer)
-    if (!npc || npc == PlayerRef)
+    if (!npc || npc == PlayerRef || npc.IsChild())
         return
     endIf
     if (!bartender)
