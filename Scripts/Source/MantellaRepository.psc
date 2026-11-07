@@ -374,7 +374,8 @@ endFunction
 
 Event OnObjectGrabbed(ObjectReference akRef, bool abIsLeft)
     Actor target = akRef as Actor
-    if (!LivingWorldPerceptionOn || !target || target == PlayerRef || target.IsDead())
+    ; children are left out of Living World entirely
+    if (!LivingWorldPerceptionOn || !target || target == PlayerRef || target.IsDead() || target.IsChild())
         return
     endIf
     string node = HiggsVR.GetGrabbedNodeName(abIsLeft)
@@ -424,7 +425,7 @@ EndEvent
 ; Also called by MantellaListenerScript.OnObjectEquipped for food, drink and potions used from the inventory.
 function LivingWorldConsumed(Actor consumer, Form item, string via)
     Potion p = item as Potion
-    if (!LivingWorldPerceptionOn || !p || p.IsPoison())
+    if (!LivingWorldPerceptionOn || !p || p.IsPoison() || !consumer || consumer.IsChild())
         return
     endIf
     ; HIGGS eating also equips the item: count it once
@@ -736,7 +737,8 @@ string function LivingWorldWitnesses(Actor doer, Actor target)
         else
             w = participants.GetAt(i - count) as Actor
         endIf
-        if (w && w != doer && w != target && w != PlayerRef && !w.IsDead() && seenAlready.Find(w) < 0)
+        ; only adult people are witnesses: no animals, no creatures (the Stump, chickens), no children
+        if (w && w != doer && w != target && w != PlayerRef && LivingWorldIsPerson(w) && seenAlready.Find(w) < 0)
             seenAlready[seenCount] = w
             seenCount += 1
             float meters = w.GetDistance(center) / 71.0210
@@ -834,8 +836,9 @@ string function LivingWorldAttireRecord(Actor a)
     return rec
 endFunction
 
+; An adult, living person. Children are left out of every Living World system.
 bool function LivingWorldIsPerson(Actor a)
-    return a && !a.IsDead() && (!_lwActorTypeNPC || a.HasKeyword(_lwActorTypeNPC))
+    return a && !a.IsDead() && !a.IsChild() && (!_lwActorTypeNPC || a.HasKeyword(_lwActorTypeNPC))
 endFunction
 
 ; One attire record each for the player, the conversation's participants and the nearby people.
@@ -925,7 +928,7 @@ endFunction
 
 ; The NPC drinks one alcoholic drink from their own inventory.
 function LivingWorldDrink(Actor drinker)
-    if (!drinker || drinker == PlayerRef)
+    if (!drinker || drinker == PlayerRef || drinker.IsChild())
         return
     endIf
     Potion drink = None
@@ -1384,7 +1387,7 @@ Event OnLwOrderDrinksBasic(Form speaker)
 EndEvent
 
 function LwOrderDrinks(Actor npc, Actor bartender, string wanted, string payer)
-    if (!npc || npc == PlayerRef)
+    if (!npc || npc == PlayerRef || npc.IsChild())
         return
     endIf
     if (!bartender)
@@ -1537,4 +1540,95 @@ function LwRecordPurchase(Actor buyer, Actor seller, Potion drink, int qty, int 
     string rec = LivingWorldHeader("purchase") + "|actor=" + LivingWorldActorField(buyer) + "|target=" + LivingWorldActorField(seller) + "|item=" + drink.GetName() + "|item_form=" + drink.GetFormID() + "|qty=" + qty + "|gold=" + gold + "|payer=" + payer + "|party=" + LivingWorldActorField(PlayerRef)
     rec += LivingWorldWitnesses(buyer, seller)
     LivingWorldQueue(rec)
+endFunction
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; LIVINGWORLD PATCH: quiet vanilla chatter during a Mantella conversation                            ;
+; When the Living World server asks for it (mantella_lw_quiet_chatter on the start reply), vanilla  ;
+; hellos, idle chatter, NPC-to-NPC small talk and comments on the player's actions are turned off   ;
+; through game settings until the conversation ends. Combat dialogue and quest force-greets are     ;
+; left alone. Game settings are not kept in the save, so the muted values are distinctive and are   ;
+; put back on cleanup and on every game load (also after a crash or a load mid-conversation).       ;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+float[] _lwChatterSaved   ; the values in use before muting (another mod's values are kept)
+
+string function LwChatterSetting(int i)
+    if i == 0
+        return "fAIMinGreetingDistance"
+    elseIf i == 1
+        return "fAIGreetingTimer"
+    elseIf i == 2
+        return "fAIExclusiveGreetingTimer"
+    elseIf i == 3
+        return "fIdleChatterCommentTimer"
+    elseIf i == 4
+        return "fIdleChatterCommentTimerMax"
+    elseIf i == 5
+        return "fAISocialTimerForConversationsMin"
+    elseIf i == 6
+        return "fAISocialTimerForConversationsMax"
+    endIf
+    return "fCommentOnPlayerActionsTimer"
+endFunction
+
+float function LwChatterVanilla(int i)
+    if i == 0
+        return 150.0
+    elseIf i == 1
+        return 5.0
+    elseIf i == 2
+        return 2.5
+    elseIf i == 3
+        return 10.0
+    elseIf i == 4
+        return 20.0
+    elseIf i == 5
+        return 10.0
+    elseIf i == 6
+        return 30.0
+    endIf
+    return 20.0
+endFunction
+
+float function LwChatterMuted(int i)
+    if i == 0
+        return 0.5        ; greet only from half a unit away: never
+    endIf
+    return 98765.0        ; seconds between lines: never during a conversation
+endFunction
+
+function LivingWorldMuteChatter()
+    if !_lwChatterSaved || _lwChatterSaved.Length != 8
+        _lwChatterSaved = new float[8]
+    endIf
+    int i = 0
+    while i < 8
+        string setting = LwChatterSetting(i)
+        float current = Game.GetGameSettingFloat(setting)
+        if current != LwChatterMuted(i)
+            _lwChatterSaved[i] = current
+        elseIf _lwChatterSaved[i] == LwChatterMuted(i) || _lwChatterSaved[i] < 0.0
+            _lwChatterSaved[i] = LwChatterVanilla(i)
+        endIf
+        Game.SetGameSettingFloat(setting, LwChatterMuted(i))
+        i += 1
+    endWhile
+endFunction
+
+; Puts back only the settings that still hold the muted value, so a change made since by
+; something else is left as it is. Safe to call at any time.
+function LivingWorldRestoreChatter()
+    int i = 0
+    while i < 8
+        string setting = LwChatterSetting(i)
+        if Game.GetGameSettingFloat(setting) == LwChatterMuted(i)
+            float original = LwChatterVanilla(i)
+            if _lwChatterSaved && _lwChatterSaved.Length == 8 && _lwChatterSaved[i] != LwChatterMuted(i) && _lwChatterSaved[i] >= 0.0
+                original = _lwChatterSaved[i]   ; filled on every mute, so this is the real earlier value
+            endIf
+            Game.SetGameSettingFloat(setting, original)
+        endIf
+        i += 1
+    endWhile
 endFunction
