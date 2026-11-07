@@ -1085,6 +1085,8 @@ int function BuildContext(bool isConversationStart = false)
     ClearIngameEvent()
     ; LIVINGWORLD PATCH: perception records (grabs, eating, drinking) queued since the last request
     SKSE_HTTP.setStringArray(_contextHandle, "mantella_lw_events", repository.LivingWorldTakeEvents())
+    ; LIVINGWORLD PATCH: what each nearby person wears in the body slot (clothing awareness)
+    SKSE_HTTP.setStringArray(_contextHandle, "mantella_lw_attire", repository.LivingWorldAttireSnapshot())
 
     ; Add nearby actors context for action targeting
     int[] nearbyActorHandles = BuildNearbyActorsContext()

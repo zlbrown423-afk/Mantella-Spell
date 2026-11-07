@@ -498,6 +498,7 @@ endEvent
 
 Event OnObjectEquipped(Form akBaseObject, ObjectReference akReference)
     repository.LivingWorldConsumed(PlayerRef, akBaseObject, "equip") ; LIVINGWORLD PATCH: food, drink, potions
+    repository.LivingWorldPlayerAttireMaybeChanged(akBaseObject) ; LIVINGWORLD PATCH: dressing
     if repository.playerTrackingOnObjectEquipped
         string itemEquipped = akBaseObject.getname()
 
@@ -510,6 +511,7 @@ endEvent
 
 
 Event OnObjectUnequipped(Form akBaseObject, ObjectReference akReference)
+    repository.LivingWorldPlayerAttireMaybeChanged(akBaseObject) ; LIVINGWORLD PATCH: undressing
     if repository.playerTrackingOnObjectUnequipped
         string itemUnequipped = akBaseObject.getname()
 
