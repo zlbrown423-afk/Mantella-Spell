@@ -216,6 +216,7 @@ Event OnPlayerLoadGame()
     repository.LivingWorldLoadNonce = Utility.RandomInt(1, 2000000000)
     repository.LivingWorldLoadedGameDays = conversation.GameDaysPassed.GetValue() + 1 ; +1 because days start at 0
     repository.LivingWorldRegisterPerception() ; LIVINGWORLD PATCH: listen for HIGGS grabs and eating again
+    repository.LivingWorldRestoreChatter() ; LIVINGWORLD PATCH: undo a chatter mute left over from before this load
     ; conversation.RegisterForConversationEvents()
     RegisterForSingleUpdate(repository.radiantFrequency)
 EndEvent
