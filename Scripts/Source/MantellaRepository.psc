@@ -809,6 +809,11 @@ function LivingWorldRegisterAttireAndDrink()
     _lwPlayerCovered = PlayerRef.GetWornForm(LivingWorldBodySlotMask) != None
     RegisterForModEvent("MantellaConversation_Advanced_Action_mantella_npc_lw_drink", "OnLivingWorldDrinkAdvanced")
     RegisterForModEvent("MantellaConversation_Action_mantella_npc_lw_drink", "OnLivingWorldDrinkLegacy")
+    _lwInFight = false
+    _lwSwimming = PlayerRef.IsSwimming()
+    if (LivingWorldHygieneOn)
+        RegisterForSingleUpdate(LivingWorldHygienePollSeconds)
+    endIf
 endFunction
 
 ; "clothing", "armor" or "none" for what the actor wears in the body slot
@@ -829,7 +834,11 @@ string function LivingWorldAttireRecord(Actor a)
     if (body)
         bodyName = body.GetName()
     endIf
-    string rec = LivingWorldHeader("attire") + "|actor=" + LivingWorldActorField(a) + "|body=" + bodyName + "|cover=" + cover
+    string sex = "m"
+    if (a.GetActorBase().GetSex() == 1)
+        sex = "f"
+    endIf
+    string rec = LivingWorldHeader("attire") + "|actor=" + LivingWorldActorField(a) + "|body=" + bodyName + "|cover=" + cover + "|sex=" + sex
     if (cover == "none")
         rec += LivingWorldWitnesses(a, None)   ; who could see them: only worked out when it matters
     endIf
@@ -885,12 +894,99 @@ function LivingWorldPlayerAttireMaybeChanged(Form item)
 endFunction
 
 Event OnUpdate()
-    bool covered = PlayerRef.GetWornForm(LivingWorldBodySlotMask) != None
-    if (covered != _lwPlayerCovered)
-        _lwPlayerCovered = covered
-        LivingWorldQueue(LivingWorldAttireRecord(PlayerRef))
+    if (LivingWorldAttireOn)
+        bool covered = PlayerRef.GetWornForm(LivingWorldBodySlotMask) != None
+        if (covered != _lwPlayerCovered)
+            _lwPlayerCovered = covered
+            LivingWorldQueue(LivingWorldAttireRecord(PlayerRef))
+        endIf
+    endIf
+    if (LivingWorldHygieneOn)
+        LwHygieneTick()
+        RegisterForSingleUpdate(LivingWorldHygienePollSeconds)
     endIf
 EndEvent
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; LIVINGWORLD PATCH: hygiene (H1)                                                                    ;
+; The server works out how clean everyone is (MantellaExtension livingworld/hygiene). The game only ;
+; reports two things it alone can see: a fight ending (the player and each adult ally who fought,   ;
+; with the lowest share of health they fell to) and the player swimming. The player never gets      ;
+; OnCombatStateChanged, so this polls two cheap checks every few seconds; allies are only scanned   ;
+; while the player is fighting.                                                                     ;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+bool property LivingWorldHygieneOn = true auto hidden
+float property LivingWorldHygienePollSeconds = 2.0 auto hidden
+float property LivingWorldMinSwimSeconds = 3.0 auto hidden
+
+bool _lwInFight = false
+Actor[] _lwFighters
+float[] _lwFighterHp
+int _lwFightTicks = 0
+bool _lwSwimming = false
+float _lwSwimStart = 0.0
+
+function LwHygieneTick()
+    if (PlayerRef.IsInCombat())
+        if (!_lwInFight)
+            _lwInFight = true
+            _lwFighters = new Actor[12]
+            _lwFighterHp = new float[12]
+            _lwFightTicks = 0
+        endIf
+        LwNoteFighter(PlayerRef)
+        _lwFightTicks += 1
+        if (_lwFightTicks % 2 == 1)   ; allies every other tick
+            Actor[] nearby = ListenerScript.ScanNearbyActors()
+            int i = 0
+            while (i < nearby.Length)
+                Actor a = nearby[i]
+                if (a && a != PlayerRef && a.IsInCombat() && !a.IsHostileToActor(PlayerRef) && LivingWorldIsPerson(a))
+                    LwNoteFighter(a)
+                endIf
+                i += 1
+            endWhile
+        endIf
+    elseIf (_lwInFight)
+        _lwInFight = false
+        int i = 0
+        while (i < _lwFighters.Length)
+            Actor a = _lwFighters[i]
+            if (a && !a.IsDead())
+                LivingWorldQueue(LivingWorldHeader("fight") + "|actor=" + LivingWorldActorField(a) + "|hp=" + _lwFighterHp[i])
+            endIf
+            i += 1
+        endWhile
+    endIf
+
+    bool swimming = PlayerRef.IsSwimming()
+    if (swimming && !_lwSwimming)
+        _lwSwimStart = Utility.GetCurrentRealTime()
+    elseIf (!swimming && _lwSwimming)
+        float seconds = Utility.GetCurrentRealTime() - _lwSwimStart
+        if (seconds >= LivingWorldMinSwimSeconds)
+            LivingWorldQueue(LivingWorldHeader("swim") + "|actor=" + LivingWorldActorField(PlayerRef) + "|dur=" + seconds)
+        endIf
+    endIf
+    _lwSwimming = swimming
+endFunction
+
+; remember someone in this fight and the lowest health they fell to
+function LwNoteFighter(Actor a)
+    float hp = a.GetActorValuePercentage("Health")
+    int slot = _lwFighters.Find(a)
+    if (slot < 0)
+        slot = _lwFighters.Find(None)
+        if (slot < 0)
+            return
+        endIf
+        _lwFighters[slot] = a
+        _lwFighterHp[slot] = hp
+    elseIf (hp < _lwFighterHp[slot])
+        _lwFighterHp[slot] = hp
+    endIf
+endFunction
 
 event OnLivingWorldDrinkAdvanced(Form speaker, Form conversationQuest, int argumentsHandle)
     MantellaConversation conv = conversationQuest as MantellaConversation
@@ -1658,7 +1754,7 @@ function LwUndress(Actor npc)
     _lwUndressOrder[slot] = _lwUndressCounter
     Utility.Wait(0.5)
     LivingWorldQueue(LivingWorldAttireRecord(npc) + "|via=action")
-    ListenerScript.AddIngameEventToConversation(npc.GetDisplayName() + " took off their clothes, down to their underclothes.")
+    ListenerScript.AddIngameEventToConversation(npc.GetDisplayName() + " took off their clothes.")
     int handle = ModEvent.Create("MantellaLivingWorld_UndressHold")
     if (handle)
         ModEvent.PushForm(handle, npc)
