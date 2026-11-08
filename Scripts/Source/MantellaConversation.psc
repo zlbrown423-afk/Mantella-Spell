@@ -343,7 +343,11 @@ function ProcessNpcSpeak(int handle)
         Debug.Notification(SKSE_HTTP.getString(handle, "mantella_lw_mood", ""))
     endif
     if(SKSE_HTTP.hasKey(handle, "mantella_lw_guard_issue_ids")) ; LIVINGWORLD PATCH: guard careers, the uniform a guard leader hands over
-        repository.LivingWorldGuardIssue(SKSE_HTTP.getIntArray(handle, "mantella_lw_guard_issue_ids"), SKSE_HTTP.getStringArray(handle, "mantella_lw_guard_issue_plugins"))
+        int[] lwIssueCounts ; LIVINGWORLD PATCH: G2 wages, how many of each (gold)
+        if(SKSE_HTTP.hasKey(handle, "mantella_lw_guard_issue_counts"))
+            lwIssueCounts = SKSE_HTTP.getIntArray(handle, "mantella_lw_guard_issue_counts")
+        endIf
+        repository.LivingWorldGuardIssue(SKSE_HTTP.getIntArray(handle, "mantella_lw_guard_issue_ids"), SKSE_HTTP.getStringArray(handle, "mantella_lw_guard_issue_plugins"), lwIssueCounts)
     endif
     ; Get actions only after the NPC starts speaking to improve response times
     int[] actionsHandles = SKSE_HTTP.getNestedDictionariesArray(handle, mConsts.KEY_ACTOR_ACTIONS)

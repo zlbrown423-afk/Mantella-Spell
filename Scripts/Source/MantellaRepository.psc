@@ -958,7 +958,8 @@ string[] function LivingWorldThaneOf()
     return Utility.ResizeStringArray(found, n)
 endFunction
 
-function LivingWorldGuardIssue(int[] ids, string[] plugins)
+function LivingWorldGuardIssue(int[] ids, string[] plugins, int[] counts = None)
+    ; counts (optional): how many of each, e.g. the gold for a guard's wages; default 1
     if (!ids)
         return
     endIf
@@ -969,8 +970,12 @@ function LivingWorldGuardIssue(int[] ids, string[] plugins)
             plugin = plugins[i]
         endIf
         Form item = Game.GetFormFromFile(ids[i], plugin)
+        int count = 1
+        if (counts && i < counts.Length && counts[i] > 0)
+            count = counts[i]
+        endIf
         if (item)
-            PlayerRef.AddItem(item, 1, false)
+            PlayerRef.AddItem(item, count, false)
         else
             Debug.Trace("Mantella Living World: guard issue item " + ids[i] + " not found in " + plugin)
         endIf
