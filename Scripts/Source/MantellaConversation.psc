@@ -342,6 +342,14 @@ function ProcessNpcSpeak(int handle)
     if(SKSE_HTTP.hasKey(handle, "mantella_lw_mood")) ; LIVINGWORLD PATCH: mood meter, sent when the NPC's mood changes
         Debug.Notification(SKSE_HTTP.getString(handle, "mantella_lw_mood", ""))
     endif
+    if(SKSE_HTTP.hasKey(handle, "mantella_lw_hints")) ; LIVINGWORLD PATCH: reputation, what the player overhears (MANTELLA_LW_INFO_LEVEL)
+        string[] lwHints = SKSE_HTTP.getStringArray(handle, "mantella_lw_hints")
+        int h = 0
+        while (lwHints && h < lwHints.Length)
+            Debug.Notification(lwHints[h])
+            h += 1
+        endWhile
+    endif
     if(SKSE_HTTP.hasKey(handle, "mantella_lw_guard_issue_ids")) ; LIVINGWORLD PATCH: guard careers, the uniform a guard leader hands over
         int[] lwIssueCounts ; LIVINGWORLD PATCH: G2 wages, how many of each (gold)
         if(SKSE_HTTP.hasKey(handle, "mantella_lw_guard_issue_counts"))

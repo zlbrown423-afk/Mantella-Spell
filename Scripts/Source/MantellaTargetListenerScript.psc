@@ -86,6 +86,15 @@ String lastHitSource = ""
 String lastAggressor = ""
 Int timesHitSameAggressorSource = 0
 Event OnHit(ObjectReference akAggressor, Form akSource, Projectile akProjectile, bool abPowerAttack, bool abSneakAttack, bool abBashAttack, bool abHitBlocked)
+    if (akAggressor == PlayerRef && !abHitBlocked) ; LIVINGWORLD PATCH: reputation, the player hit this NPC
+        string sourceName = ""
+        if (akSource)
+            sourceName = akSource.GetName()
+        endIf
+        if (sourceName != "Mantella" && sourceName != "Mantella Remove NPC" && sourceName != "Mantella End Conversation")
+            repository.LwRecordHit(self.GetActorReference(), akSource, "conversation")
+        endIf
+    endIf
     if repository.targetTrackingOnHit 
         String aggressor
         if akAggressor == PlayerRef

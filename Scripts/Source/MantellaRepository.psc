@@ -376,6 +376,7 @@ function LivingWorldRegisterPerception()
     endIf
     LivingWorldRegisterAttireAndDrink()
     LivingWorldRegisterActions()
+    LwRegisterReputation() ; LIVINGWORLD PATCH: reputation (S2)
 endFunction
 
 Event OnObjectGrabbed(ObjectReference akRef, bool abIsLeft)
@@ -908,6 +909,7 @@ endFunction
 
 ; MantellaConversation.BuildContext takes the queue with each request.
 string[] function LivingWorldTakeEvents()
+    LwFlushGift() ; a gift still being put together goes with this request
     string[] taken = LivingWorldEvents
     LivingWorldEvents = Utility.CreateStringArray(0)
     if (!taken)
@@ -2320,4 +2322,219 @@ function LivingWorldRestoreChatter()
         endIf
         i += 1
     endWhile
+endFunction
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; LIVINGWORLD PATCH: reputation (S2). Three more things the player does that people see and talk   ;
+; about, queued like grabs (see livingworld/perception/records.py in MantellaExtension):            ;
+;   gift  - items handed to an adult NPC outside trading (GiftMenu, or given with no menu open).    ;
+;           Several items to one person within LwGiftMergeSeconds become one record.                ;
+;   theft - when the game itself counts a theft ("Items Stolen") or a picked pocket ("Pockets       ;
+;           Picked"), paired with the item the player just took. Nothing is guessed: no count, no  ;
+;           record.                                                                                 ;
+;   hit   - the player striking an adult NPC who is not an enemy: when the game counts an assault  ;
+;           ("Assaults", the victim being the nearest person fighting the player), or when a        ;
+;           conversation NPC is hit (MantellaTargetListenerScript.OnHit). One record per person per  ;
+;           LwHitCooldownSeconds.                                                                   ;
+; Handlers only copy a few values; witnesses are scanned once, when a record is written.            ;
+; The server decides who saw what; this script never decides anything with it.                     ;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+bool property LivingWorldReputationOn = true auto hidden
+float property LwGiftMergeSeconds = 10.0 auto hidden
+float property LwTheftPairSeconds = 2.0 auto hidden
+float property LwHitCooldownSeconds = 15.0 auto hidden
+
+Actor _lwGiftTarget
+string _lwGiftItem
+int _lwGiftQty
+int _lwGiftValue
+bool _lwGiftMany
+string _lwGiftVia
+float _lwGiftAt
+
+Form _lwTakenItem
+int _lwTakenQty
+ObjectReference _lwTakenFrom
+ObjectReference _lwTakenRef
+float _lwTakenAt = -100.0
+string _lwTheftPending = ""
+float _lwTheftPendingAt = -100.0
+
+Actor _lwLastHit
+float _lwLastHitAt = -100.0
+
+; Called from LivingWorldRegisterPerception on every load (registering again is harmless).
+function LwRegisterReputation()
+    _lwGiftTarget = None
+    _lwTheftPending = ""
+    RegisterForTrackedStatsEvent()
+endFunction
+
+; MantellaListenerScript.OnItemRemoved, when the player's item went to an actor.
+function LwNoteGiven(Actor receiver, Form item, int count)
+    if (!LivingWorldReputationOn || !LivingWorldPerceptionOn || !receiver || receiver == PlayerRef)
+        return
+    endIf
+    ; selling, a follower's pack and planting by pickpocket are not gifts
+    if (UI.IsMenuOpen("BarterMenu") || UI.IsMenuOpen("ContainerMenu") || !LivingWorldIsPerson(receiver))
+        return
+    endIf
+    float now = Utility.GetCurrentRealTime()
+    if (_lwGiftTarget && (_lwGiftTarget != receiver || now - _lwGiftAt > LwGiftMergeSeconds))
+        LwFlushGift()
+    endIf
+    string itemName = item.GetName()
+    if (!_lwGiftTarget)
+        _lwGiftTarget = receiver
+        _lwGiftItem = itemName
+        _lwGiftQty = 0
+        _lwGiftValue = 0
+        _lwGiftMany = false
+        _lwGiftVia = "hand"
+        if (UI.IsMenuOpen("GiftMenu"))
+            _lwGiftVia = "gift_menu"
+        endIf
+    elseIf (itemName != _lwGiftItem)
+        _lwGiftMany = true
+    endIf
+    _lwGiftQty += count
+    _lwGiftValue += item.GetGoldValue() * count
+    _lwGiftAt = now
+endFunction
+
+; Writes the pending gift, if any. Also called before each request takes the event queue.
+function LwFlushGift()
+    Actor target = _lwGiftTarget
+    if (!target)
+        return
+    endIf
+    _lwGiftTarget = None
+    string item = _lwGiftItem
+    int qty = _lwGiftQty
+    if (_lwGiftMany)
+        item = _lwGiftItem + " and other things"
+        qty = 1
+    endIf
+    string rec = LivingWorldHeader("gift") + "|actor=" + LivingWorldActorField(PlayerRef) + "|target=" + LivingWorldActorField(target) + "|item=" + item + "|qty=" + qty + "|gold=" + _lwGiftValue + "|via=" + _lwGiftVia + "|trank=" + target.GetRelationshipRank(PlayerRef)
+    rec += LivingWorldWitnesses(PlayerRef, target)
+    LivingWorldQueue(rec)
+endFunction
+
+; MantellaListenerScript.OnItemAdded: only remembers what was taken, in case the game calls it a theft.
+function LwNoteTaken(Form item, int count, ObjectReference itemRef, ObjectReference source)
+    _lwTakenItem = item
+    _lwTakenQty = count
+    _lwTakenFrom = source
+    _lwTakenRef = itemRef
+    _lwTakenAt = Utility.GetCurrentRealTime()
+    if (_lwTheftPending != "" && _lwTakenAt - _lwTheftPendingAt <= LwTheftPairSeconds)
+        string via = _lwTheftPending
+        _lwTheftPending = ""
+        LwRecordTheft(via)
+    endIf
+endFunction
+
+Event OnTrackedStatsEvent(string asStat, int aiStatValue)
+    if (!LivingWorldReputationOn || !LivingWorldPerceptionOn)
+        return
+    endIf
+    string via = ""
+    if (asStat == "Items Stolen")
+        via = "take"
+    elseIf (asStat == "Pockets Picked")
+        via = "pickpocket"
+    elseIf (asStat == "Assaults")
+        LwAssault()
+        return
+    else
+        return
+    endIf
+    float now = Utility.GetCurrentRealTime()
+    if (_lwTakenItem && now - _lwTakenAt <= LwTheftPairSeconds)
+        LwRecordTheft(via)
+    else
+        ; the item may arrive just after the count: OnItemAdded pairs them
+        _lwTheftPending = via
+        _lwTheftPendingAt = now
+    endIf
+EndEvent
+
+function LwRecordTheft(string via)
+    Form item = _lwTakenItem
+    if (!item)
+        return
+    endIf
+    _lwTakenItem = None
+    Actor victim = _lwTakenFrom as Actor
+    string owner = ""
+    if (victim)
+        if (victim.IsChild())
+            return   ; children are left out of every Living World system
+        endIf
+        owner = victim.GetDisplayName()
+    else
+        ActorBase ownerBase = None
+        if (_lwTakenFrom)
+            ownerBase = _lwTakenFrom.GetActorOwner()
+        endIf
+        if (!ownerBase && _lwTakenRef)
+            ownerBase = _lwTakenRef.GetActorOwner()
+        endIf
+        if (ownerBase)
+            owner = ownerBase.GetName()
+        endIf
+    endIf
+    string rec = LivingWorldHeader("theft") + "|actor=" + LivingWorldActorField(PlayerRef)
+    if (victim && via == "pickpocket")
+        rec += "|target=" + LivingWorldActorField(victim)
+    endIf
+    rec += "|item=" + item.GetName() + "|qty=" + _lwTakenQty + "|gold=" + (item.GetGoldValue() * _lwTakenQty) + "|via=" + via + "|owner=" + owner
+    rec += LivingWorldWitnesses(PlayerRef, victim)
+    LivingWorldQueue(rec)
+endFunction
+
+; The game counted an assault: the victim is the nearest adult person fighting the player.
+function LwAssault()
+    Actor[] nearby = ListenerScript.ScanNearbyActors()
+    Actor best = None
+    float bestDistance = 600.0   ; about 8.5 m
+    int i = 0
+    while (i < nearby.Length)
+        Actor a = nearby[i]
+        if (a && a != PlayerRef && LivingWorldIsPerson(a) && a.GetCombatTarget() == PlayerRef)
+            float d = a.GetDistance(PlayerRef)
+            if (d < bestDistance)
+                best = a
+                bestDistance = d
+            endIf
+        endIf
+        i += 1
+    endWhile
+    if (best)
+        LwRecordHit(best, None, "assault")
+    endIf
+endFunction
+
+; Also called from MantellaTargetListenerScript.OnHit when the player hits a conversation NPC.
+function LwRecordHit(Actor victim, Form weapon, string via)
+    if (!LivingWorldReputationOn || !LivingWorldPerceptionOn || !victim || victim == PlayerRef || !LivingWorldIsPerson(victim))
+        return
+    endIf
+    if (via != "assault" && victim.IsHostileToActor(PlayerRef))
+        return   ; fighting an enemy is not news
+    endIf
+    float now = Utility.GetCurrentRealTime()
+    if (victim == _lwLastHit && now - _lwLastHitAt < LwHitCooldownSeconds)
+        return
+    endIf
+    _lwLastHit = victim
+    _lwLastHitAt = now
+    string weaponName = ""
+    if (weapon)
+        weaponName = weapon.GetName()
+    endIf
+    string rec = LivingWorldHeader("hit") + "|actor=" + LivingWorldActorField(PlayerRef) + "|target=" + LivingWorldActorField(victim) + "|item=" + weaponName + "|via=" + via + "|trank=" + victim.GetRelationshipRank(PlayerRef)
+    rec += LivingWorldWitnesses(PlayerRef, victim)
+    LivingWorldQueue(rec)
 endFunction
