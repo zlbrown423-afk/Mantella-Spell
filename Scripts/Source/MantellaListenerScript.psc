@@ -391,6 +391,7 @@ endEvent
 
 ;All the event listeners below have 'if' clauses added after Mantella 0.9.2 (except ondying)
 Event OnItemAdded(Form akBaseItem, int aiItemCount, ObjectReference akItemReference, ObjectReference akSourceContainer)
+    repository.LwNoteTaken(akBaseItem, aiItemCount, akItemReference, akSourceContainer) ; LIVINGWORLD PATCH: reputation, paired with the game's theft count
     if repository.playerTrackingOnItemAdded
         string itemName = akBaseItem.GetName()
         string itemCount = ""
@@ -411,6 +412,9 @@ EndEvent
 
 
 Event OnItemRemoved(Form akBaseItem, int aiItemCount, ObjectReference akItemReference, ObjectReference akDestContainer)
+    if (akDestContainer as Actor) ; LIVINGWORLD PATCH: reputation, a gift to someone
+        repository.LwNoteGiven(akDestContainer as Actor, akBaseItem, aiItemCount)
+    endIf
     if Repository.playerTrackingOnItemRemoved
         string itemName = akBaseItem.GetName()
         string itemCount = ""
