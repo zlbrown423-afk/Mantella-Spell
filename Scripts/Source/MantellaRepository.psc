@@ -359,11 +359,13 @@ float property LivingWorldMinGrabSeconds = 0.3 auto hidden     ; shorter holds a
 float property LivingWorldGrabLineCooldown = 5.0 auto hidden    ; seconds between "X grabbed Y" lines for one person
 Actor _lwLastSaidTarget
 float _lwLastSaidAt
+bool _lwAreaBusy = false
 
 ; Called on every game load (HIGGS registrations are not kept in the save).
 function LivingWorldRegisterPerception()
     _lwLeftHeld = None
     _lwRightHeld = None
+    _lwAreaBusy = false
     if (SKSE.GetPluginVersion("HIGGS") > 0)
         HiggsVR.RegisterForGrabEvent(self)
         HiggsVR.RegisterForDropEvent(self)
@@ -382,33 +384,59 @@ Event OnObjectGrabbed(ObjectReference akRef, bool abIsLeft)
     if (!LivingWorldPerceptionOn || !target || target == PlayerRef || target.IsDead() || target.IsChild())
         return
     endIf
-    float now = Utility.GetCurrentRealTime()
     ; the same person grabbed again by the same hand without a drop in between: one hold, not two
     if ((abIsLeft && _lwLeftHeld == target) || (!abIsLeft && _lwRightHeld == target))
         LwProbeCount(abIsLeft, 0, 1)
         return
     endIf
-    string node = HiggsVR.GetGrabbedNodeName(abIsLeft)
-    string area = LivingWorldGrabArea(target, abIsLeft)
+    float now = Utility.GetCurrentRealTime()
     ; a hand that grabs again without a drop event: close the previous grab first
+    if (abIsLeft && _lwLeftHeld)
+        LivingWorldEndHold(_lwLeftHeld, true, now)
+    elseIf (!abIsLeft && _lwRightHeld)
+        LivingWorldEndHold(_lwRightHeld, false, now)
+    endIf
+    ; The hold starts now, before anything slow, so a drop that arrives while the area is still being
+    ; worked out finds a consistent hold to close.
     if (abIsLeft)
-        if (_lwLeftHeld)
-            LivingWorldEndHold(_lwLeftHeld, true, now)
-        endIf
         _lwLeftHeld = target
         _lwLeftSince = now
-        _lwLeftNode = node
-        _lwLeftArea = area
+        _lwLeftNode = ""
+        _lwLeftArea = ""
     else
-        if (_lwRightHeld)
-            LivingWorldEndHold(_lwRightHeld, false, now)
-        endIf
         _lwRightHeld = target
         _lwRightSince = now
-        _lwRightNode = node
-        _lwRightArea = area
+        _lwRightNode = ""
+        _lwRightArea = ""
     endIf
-    LwProbeHoldStarted(abIsLeft, target, now, (Utility.GetCurrentRealTime() - now) * 1000.0)
+    LwProbeHoldStarted(abIsLeft, target, now, 0.0)
+    string node = HiggsVR.GetGrabbedNodeName(abIsLeft)
+    if (abIsLeft && _lwLeftHeld == target && _lwLeftSince == now)
+        _lwLeftNode = node
+    elseIf (!abIsLeft && _lwRightHeld == target && _lwRightSince == now)
+        _lwRightNode = node
+    endIf
+    ; Working out the body area reads bone positions, and every such read waits for the game's main thread.
+    ; Only one at a time: while one runs, another grab is recorded without an area (the server then uses the
+    ; node name). A pile of these waiting behind each other is what froze the game for 30 s (2026-11-08).
+    if (_lwAreaBusy)
+        if (abIsLeft)
+            _lwPLNoArea += 1
+        else
+            _lwPRNoArea += 1
+        endIf
+        return
+    endIf
+    _lwAreaBusy = true
+    string area = LivingWorldGrabArea(target, abIsLeft, node)
+    _lwAreaBusy = false
+    if (abIsLeft && _lwLeftHeld == target && _lwLeftSince == now)
+        _lwLeftArea = area
+        _lwPLGrabMs = (Utility.GetCurrentRealTime() - now) * 1000.0
+    elseIf (!abIsLeft && _lwRightHeld == target && _lwRightSince == now)
+        _lwRightArea = area
+        _lwPRGrabMs = (Utility.GetCurrentRealTime() - now) * 1000.0
+    endIf
 EndEvent
 
 Event OnObjectDropped(ObjectReference akRef, bool abIsLeft)
@@ -429,6 +457,10 @@ function LivingWorldEndHold(Actor target, bool abIsLeft, float now)
     if (abIsLeft)
         _lwLeftHeld = None
         seconds = now - _lwLeftSince
+        if (seconds < 0.0)   ; this drop's clock was read before the hold it closes began
+            now = _lwLeftSince
+            seconds = 0.0
+        endIf
         if (seconds >= LivingWorldMinGrabSeconds)
             LivingWorldRecordGrab(target, _lwLeftNode, _lwLeftArea, "L", seconds)
         else
@@ -437,6 +469,10 @@ function LivingWorldEndHold(Actor target, bool abIsLeft, float now)
     else
         _lwRightHeld = None
         seconds = now - _lwRightSince
+        if (seconds < 0.0)
+            now = _lwRightSince
+            seconds = 0.0
+        endIf
         if (seconds >= LivingWorldMinGrabSeconds)
             LivingWorldRecordGrab(target, _lwRightNode, _lwRightArea, "R", seconds)
         else
@@ -496,7 +532,7 @@ endFunction
 ; Instead: take the hand's position (first-person skeleton, which follows the VR controller), find the
 ; nearest bone segment of the NPC's skeleton, and for the torso tell front, back and side from the way
 ; the NPC faces. Returns "" when it cannot tell; the server then falls back to the node name.
-string function LivingWorldGrabArea(Actor target, bool abIsLeft)
+string function LivingWorldGrabArea(Actor target, bool abIsLeft, string grabbedNode)
     if (!target.Is3DLoaded())
         return ""
     endIf
@@ -506,17 +542,19 @@ string function LivingWorldGrabArea(Actor target, bool abIsLeft)
         handNode = "NPC L Hand [LHnd]"
         fingerNode = "NPC L Finger20 [LF20]"
     endIf
-    if (!NetImmerse.HasNode(PlayerRef, handNode, true))
+    ; one call per position: each call waits for the game's main thread (about a frame), so they add up
+    float[] p = new float[3]
+    if (!NetImmerse.GetNodeWorldPosition(PlayerRef, handNode, p, true))
         return ""
     endIf
-    float hx = NetImmerse.GetNodeWorldPositionX(PlayerRef, handNode, true)
-    float hy = NetImmerse.GetNodeWorldPositionY(PlayerRef, handNode, true)
-    float hz = NetImmerse.GetNodeWorldPositionZ(PlayerRef, handNode, true)
+    float hx = p[0]
+    float hy = p[1]
+    float hz = p[2]
     ; the hand node sits at the wrist: move to the palm, halfway to the middle finger
-    if (NetImmerse.HasNode(PlayerRef, fingerNode, true))
-        hx = (hx + NetImmerse.GetNodeWorldPositionX(PlayerRef, fingerNode, true)) / 2.0
-        hy = (hy + NetImmerse.GetNodeWorldPositionY(PlayerRef, fingerNode, true)) / 2.0
-        hz = (hz + NetImmerse.GetNodeWorldPositionZ(PlayerRef, fingerNode, true)) / 2.0
+    if (NetImmerse.GetNodeWorldPosition(PlayerRef, fingerNode, p, true))
+        hx = (hx + p[0]) / 2.0
+        hy = (hy + p[1]) / 2.0
+        hz = (hz + p[2]) / 2.0
     endIf
 
     string[] nodes = new string[20]
@@ -540,17 +578,20 @@ string function LivingWorldGrabArea(Actor target, bool abIsLeft)
     nodes[17] = "NPC R Thigh [RThg]"
     nodes[18] = "NPC R Calf [RClf]"
     nodes[19] = "NPC R Foot [Rft ]"
+    ; Only the bones near the ragdoll body HIGGS holds: an arm, a leg, the head, or the torso (with the
+    ; shoulders, where torso grabs often land). At most 9 bone reads instead of 20 checks and 60 reads.
+    bool[] want = LivingWorldBonesNear(grabbedNode)
     float[] nx = new float[20]
     float[] ny = new float[20]
     float[] nz = new float[20]
     bool[] has = new bool[20]
     int i = 0
     while (i < 20)
-        if (NetImmerse.HasNode(target, nodes[i], false))
+        if (want[i] && NetImmerse.GetNodeWorldPosition(target, nodes[i], p, false))
             has[i] = true
-            nx[i] = NetImmerse.GetNodeWorldPositionX(target, nodes[i], false)
-            ny[i] = NetImmerse.GetNodeWorldPositionY(target, nodes[i], false)
-            nz[i] = NetImmerse.GetNodeWorldPositionZ(target, nodes[i], false)
+            nx[i] = p[0]
+            ny[i] = p[1]
+            nz[i] = p[2]
         endIf
         i += 1
     endWhile
@@ -706,6 +747,55 @@ string function LivingWorldGrabArea(Actor target, bool abIsLeft)
     return "lower back"
 endFunction
 
+; Which of LivingWorldGrabArea's 20 bones to read for a grab on this ragdoll body (HIGGS node name).
+bool[] function LivingWorldBonesNear(string grabbedNode)
+    bool[] want = new bool[20]
+    string side = ""
+    if (StringUtil.Find(grabbedNode, " L ") >= 0)
+        side = "L"
+    elseIf (StringUtil.Find(grabbedNode, " R ") >= 0)
+        side = "R"
+    endIf
+    bool arm = StringUtil.Find(grabbedNode, "Arm") >= 0 || StringUtil.Find(grabbedNode, "Forearm") >= 0 || StringUtil.Find(grabbedNode, "Hand") >= 0 || StringUtil.Find(grabbedNode, "Finger") >= 0 || StringUtil.Find(grabbedNode, "Thumb") >= 0
+    bool leg = StringUtil.Find(grabbedNode, "Thigh") >= 0 || StringUtil.Find(grabbedNode, "Calf") >= 0 || StringUtil.Find(grabbedNode, "Foot") >= 0 || StringUtil.Find(grabbedNode, "Toe") >= 0
+    bool head = StringUtil.Find(grabbedNode, "Head") >= 0 || StringUtil.Find(grabbedNode, "Neck") >= 0
+    if (arm && side == "L")
+        want[6] = true
+        want[7] = true
+        want[8] = true
+        want[9] = true
+    elseIf (arm && side == "R")
+        want[10] = true
+        want[11] = true
+        want[12] = true
+        want[13] = true
+    elseIf (leg && side == "L")
+        want[14] = true
+        want[15] = true
+        want[16] = true
+    elseIf (leg && side == "R")
+        want[17] = true
+        want[18] = true
+        want[19] = true
+    elseIf (head)
+        want[3] = true
+        want[4] = true
+        want[5] = true
+    else
+        ; torso (spine, pelvis, COM, clavicle) or unknown: pelvis, spine, neck and shoulders
+        want[0] = true
+        want[1] = true
+        want[2] = true
+        want[3] = true
+        want[4] = true
+        want[6] = true
+        want[7] = true
+        want[10] = true
+        want[11] = true
+    endIf
+    return want
+endFunction
+
 ; Squared distance from point h to segment a-b. Leaves the closest point of the segment in _lwPx/_lwPy/_lwPz.
 float function LivingWorldSegmentDistance2(float ax, float ay, float az, float bx, float by, float bz, float hx, float hy, float hz)
     float dx = bx - ax
@@ -731,12 +821,14 @@ float function LivingWorldSegmentDistance2(float ax, float ay, float az, float b
 endFunction
 
 string function LivingWorldHeader(string kind)
+    ; copy the counter at once: another event's stack may run while this one waits on a game call below
     LivingWorldEventCounter += 1
+    int n = LivingWorldEventCounter
     string loc = (PlayerRef.GetCurrentLocation() as Form).GetName()
     if (loc == "")
         loc = "Skyrim"
     endIf
-    return "v=1|key=" + LivingWorldLoadNonce + "-" + LivingWorldEventCounter + "|type=" + kind + "|gt=" + (Utility.GetCurrentGameTime() + 1.0) + "|loc=" + loc
+    return "v=1|key=" + LivingWorldLoadNonce + "-" + n + "|type=" + kind + "|gt=" + (Utility.GetCurrentGameTime() + 1.0) + "|loc=" + loc
 endFunction
 
 ; ref^base^ref_plugin^base_plugin^is_player^name (plugin names: see MantellaConversation.LivingWorldPluginName)
@@ -1011,6 +1103,7 @@ float _lwPLLagSum
 float _lwPLLagMax
 int _lwPLStalls
 float _lwPLGrabMs
+int _lwPLNoArea
 int _lwPRGrabs
 int _lwPRDrops
 int _lwPRDups
@@ -1020,6 +1113,7 @@ float _lwPRLagSum
 float _lwPRLagMax
 int _lwPRStalls
 float _lwPRGrabMs
+int _lwPRNoArea
 
 function LwProbeHoldStarted(bool abIsLeft, Actor target, float now, float grabMs)
     if (abIsLeft)
@@ -1032,6 +1126,7 @@ function LwProbeHoldStarted(bool abIsLeft, Actor target, float now, float grabMs
         _lwPLLagMax = 0.0
         _lwPLStalls = 0
         _lwPLGrabMs = grabMs
+        _lwPLNoArea = 0
     else
         _lwPRGrabs = 1
         _lwPRDrops = 0
@@ -1042,6 +1137,7 @@ function LwProbeHoldStarted(bool abIsLeft, Actor target, float now, float grabMs
         _lwPRLagMax = 0.0
         _lwPRStalls = 0
         _lwPRGrabMs = grabMs
+        _lwPRNoArea = 0
     endIf
     if (LivingWorldProbeOn && !_lwProbeOn)
         _lwProbeOn = true
@@ -1106,6 +1202,7 @@ function LwProbeHoldEnded(bool abIsLeft, Actor target, float now)
     float lagMax = _lwPRLagMax
     int stalls = _lwPRStalls
     float grabMs = _lwPRGrabMs
+    int noArea = _lwPRNoArea
     if (abIsLeft)
         hand = "L"
         since = _lwLeftSince
@@ -1118,12 +1215,13 @@ function LwProbeHoldEnded(bool abIsLeft, Actor target, float now)
         lagMax = _lwPLLagMax
         stalls = _lwPLStalls
         grabMs = _lwPLGrabMs
+        noArea = _lwPLNoArea
     endIf
     float lagAvg = 0.0
     if (ticks > 0)
         lagAvg = lagSum / ticks
     endIf
-    LivingWorldQueue(LivingWorldHeader("perf") + "|what=grab|hand=" + hand + "|target=" + target.GetDisplayName() + "|rt0=" + since + "|rt1=" + now + "|grabs=" + grabs + "|drops=" + drops + "|dups=" + dups + "|short=" + shortHolds + "|ticks=" + ticks + "|lag_avg=" + lagAvg + "|lag_max=" + lagMax + "|stalls=" + stalls + "|grab_ms=" + grabMs)
+    LivingWorldQueue(LivingWorldHeader("perf") + "|what=grab|hand=" + hand + "|target=" + target.GetDisplayName() + "|rt0=" + since + "|rt1=" + now + "|grabs=" + grabs + "|drops=" + drops + "|dups=" + dups + "|short=" + shortHolds + "|ticks=" + ticks + "|lag_avg=" + lagAvg + "|lag_max=" + lagMax + "|stalls=" + stalls + "|grab_ms=" + grabMs + "|noarea=" + noArea)
     if (!_lwLeftHeld && !_lwRightHeld)
         _lwProbeOn = false
         if (LivingWorldHygieneOn)
