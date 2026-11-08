@@ -916,6 +916,68 @@ string[] function LivingWorldTakeEvents()
     return taken
 endFunction
 
+; LIVINGWORLD PATCH: guard careers. When a guard leader takes the player on, the server names the
+; hold's uniform (plugin-relative form IDs plus their plugin) with the NPC's line, and the player gets
+; one of each. Nothing here decides anything: the server's rules already said yes.
+; LIVINGWORLD PATCH: guard careers. The holds whose vanilla "Thane of ..." quest (Favor250-258, Skyrim.esm) is
+; completed. Read once at the start of a conversation: eight GetFormFromFile + IsCompleted calls, no polling.
+; The Rift (Favor251) is left out until its form ID is checked; "debug guard thane" covers it in testing.
+string[] function LivingWorldThaneOf()
+    int[] ids = new int[8]
+    string[] holds = new string[8]
+    ids[0] = 0x000A2C9E
+    holds[0] = "Whiterun"
+    ids[1] = 0x000A2C9B
+    holds[1] = "Haafingar"
+    ids[2] = 0x000A2C86
+    holds[2] = "the Reach"
+    ids[3] = 0x000A2CA6
+    holds[3] = "Eastmarch"
+    ids[4] = 0x000A34CE
+    holds[4] = "Hjaalmarch"
+    ids[5] = 0x000A34D4
+    holds[5] = "the Pale"
+    ids[6] = 0x000A34D7
+    holds[6] = "Winterhold"
+    ids[7] = 0x000A34DE
+    holds[7] = "Falkreath"
+    string[] found = new string[8]
+    int n = 0
+    int i = 0
+    while (i < ids.Length)
+        Quest q = Game.GetFormFromFile(ids[i], "Skyrim.esm") as Quest
+        if (q && q.IsCompleted())
+            found[n] = holds[i]
+            n += 1
+        endIf
+        i += 1
+    endWhile
+    if (n == 0)
+        return new string[1] ; the server ignores empty names
+    endIf
+    return Utility.ResizeStringArray(found, n)
+endFunction
+
+function LivingWorldGuardIssue(int[] ids, string[] plugins)
+    if (!ids)
+        return
+    endIf
+    int i = 0
+    while (i < ids.Length)
+        string plugin = "Skyrim.esm"
+        if (plugins && i < plugins.Length && plugins[i] != "")
+            plugin = plugins[i]
+        endIf
+        Form item = Game.GetFormFromFile(ids[i], plugin)
+        if (item)
+            PlayerRef.AddItem(item, 1, false)
+        else
+            Debug.Trace("Mantella Living World: guard issue item " + ids[i] + " not found in " + plugin)
+        endIf
+        i += 1
+    endWhile
+endFunction
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; LIVINGWORLD PATCH: clothing awareness and drinking                                                 ;
 ; Attire: what each nearby person wears in the body slot (32), sent with every request under        ;

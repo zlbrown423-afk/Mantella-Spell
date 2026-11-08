@@ -342,6 +342,9 @@ function ProcessNpcSpeak(int handle)
     if(SKSE_HTTP.hasKey(handle, "mantella_lw_mood")) ; LIVINGWORLD PATCH: mood meter, sent when the NPC's mood changes
         Debug.Notification(SKSE_HTTP.getString(handle, "mantella_lw_mood", ""))
     endif
+    if(SKSE_HTTP.hasKey(handle, "mantella_lw_guard_issue_ids")) ; LIVINGWORLD PATCH: guard careers, the uniform a guard leader hands over
+        repository.LivingWorldGuardIssue(SKSE_HTTP.getIntArray(handle, "mantella_lw_guard_issue_ids"), SKSE_HTTP.getStringArray(handle, "mantella_lw_guard_issue_plugins"))
+    endif
     ; Get actions only after the NPC starts speaking to improve response times
     int[] actionsHandles = SKSE_HTTP.getNestedDictionariesArray(handle, mConsts.KEY_ACTOR_ACTIONS)
     if actionsHandles && actionsHandles.Length > 0
@@ -1021,6 +1024,26 @@ function AddLivingWorldPluginNames(int handle, Actor actorToBuild)
     endif
 endFunction
 
+; LIVINGWORLD PATCH: guard careers. Whether this NPC is a guard, which hold's crime faction they keep, and
+; the player's bounty there: three cheap native calls, once per participant when the conversation builds
+; its actor list. The server decides from these who belongs to which hold's guard (livingworld/guard).
+function AddLivingWorldGuardInfo(int handle, Actor actorToBuild)
+    if (actorToBuild == PlayerRef)
+        return
+    endif
+    SKSE_HTTP.setBool(handle, "mantella_lw_is_guard", actorToBuild.IsGuard())
+    Faction crime = actorToBuild.GetCrimeFaction()
+    if (crime)
+        int fid = crime.GetFormID()
+        SKSE_HTTP.setInt(handle, "mantella_lw_crime_faction", fid)
+        string plugin = LivingWorldPluginName(fid)
+        if (plugin != "")
+            SKSE_HTTP.setString(handle, "mantella_lw_crime_plugin", plugin)
+        endif
+        SKSE_HTTP.setInt(handle, "mantella_lw_player_bounty", crime.GetCrimeGold())
+    endif
+endFunction
+
 ; LIVINGWORLD PATCH: the save-load info the server needs to roll memories back to this save
 function AddLivingWorldLoadInfo(int handle)
     if (repository.LivingWorldLoadNonce != 0)
@@ -1035,6 +1058,7 @@ int function buildActorSetting(Actor actorToBuild)
     SKSE_HTTP.setInt(handle, mConsts.KEY_ACTOR_BASEID, (actorToBuild.getactorbase() as form).getformid())
     SKSE_HTTP.setInt(handle, mConsts.KEY_ACTOR_REFID, (actorToBuild as form).getformid())
     AddLivingWorldPluginNames(handle, actorToBuild) ; LIVINGWORLD PATCH
+    AddLivingWorldGuardInfo(handle, actorToBuild) ; LIVINGWORLD PATCH: guard careers
     SKSE_HTTP.setString(handle, mConsts.KEY_ACTOR_NAME, GetActorName(actorToBuild))
     bool isPlayerCharacter = actorToBuild == PlayerRef
     SKSE_HTTP.setBool(handle, mConsts.KEY_ACTOR_ISPLAYER, isPlayerCharacter)
@@ -1096,6 +1120,9 @@ int function BuildContext(bool isConversationStart = false)
     SKSE_HTTP.setFloat(_contextHandle, "mantella_lw_rt", Utility.GetCurrentRealTime())
     ; LIVINGWORLD PATCH: what each nearby person wears in the body slot (clothing awareness)
     SKSE_HTTP.setStringArray(_contextHandle, "mantella_lw_attire", repository.LivingWorldAttireSnapshot())
+    if (isConversationStart) ; LIVINGWORLD PATCH: guard careers, the holds the player is thane of (once per conversation)
+        SKSE_HTTP.setStringArray(_contextHandle, "mantella_lw_thane_of", repository.LivingWorldThaneOf())
+    endIf
 
     ; Add nearby actors context for action targeting
     int[] nearbyActorHandles = BuildNearbyActorsContext()
