@@ -2517,7 +2517,7 @@ function LwAssault()
 endFunction
 
 ; Also called from MantellaTargetListenerScript.OnHit when the player hits a conversation NPC.
-function LwRecordHit(Actor victim, Form weapon, string via)
+function LwRecordHit(Actor victim, Form hitSource, string via)  ; not 'weapon': Papyrus names ignore case, so it clashes with the Weapon type
     if (!LivingWorldReputationOn || !LivingWorldPerceptionOn || !victim || victim == PlayerRef || !LivingWorldIsPerson(victim))
         return
     endIf
@@ -2531,8 +2531,8 @@ function LwRecordHit(Actor victim, Form weapon, string via)
     _lwLastHit = victim
     _lwLastHitAt = now
     string weaponName = ""
-    if (weapon)
-        weaponName = weapon.GetName()
+    if (hitSource)
+        weaponName = hitSource.GetName()
     endIf
     string rec = LivingWorldHeader("hit") + "|actor=" + LivingWorldActorField(PlayerRef) + "|target=" + LivingWorldActorField(victim) + "|item=" + weaponName + "|via=" + via + "|trank=" + victim.GetRelationshipRank(PlayerRef)
     rec += LivingWorldWitnesses(PlayerRef, victim)
