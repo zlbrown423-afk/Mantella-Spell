@@ -1092,6 +1092,8 @@ int function BuildContext(bool isConversationStart = false)
     ClearIngameEvent()
     ; LIVINGWORLD PATCH: perception records (grabs, eating, drinking) queued since the last request
     SKSE_HTTP.setStringArray(_contextHandle, "mantella_lw_events", repository.LivingWorldTakeEvents())
+    ; LIVINGWORLD PATCH: the game's real-time clock, so the server can line up the timing records with its own
+    SKSE_HTTP.setFloat(_contextHandle, "mantella_lw_rt", Utility.GetCurrentRealTime())
     ; LIVINGWORLD PATCH: what each nearby person wears in the body slot (clothing awareness)
     SKSE_HTTP.setStringArray(_contextHandle, "mantella_lw_attire", repository.LivingWorldAttireSnapshot())
 

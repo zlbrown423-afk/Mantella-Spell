@@ -355,6 +355,10 @@ float _lwPy
 float _lwPz
 Form _lwLastMouthForm
 float _lwLastMouthTime
+float property LivingWorldMinGrabSeconds = 0.3 auto hidden     ; shorter holds are HIGGS flicker, not a grab
+float property LivingWorldGrabLineCooldown = 5.0 auto hidden    ; seconds between "X grabbed Y" lines for one person
+Actor _lwLastSaidTarget
+float _lwLastSaidAt
 
 ; Called on every game load (HIGGS registrations are not kept in the save).
 function LivingWorldRegisterPerception()
@@ -378,13 +382,18 @@ Event OnObjectGrabbed(ObjectReference akRef, bool abIsLeft)
     if (!LivingWorldPerceptionOn || !target || target == PlayerRef || target.IsDead() || target.IsChild())
         return
     endIf
+    float now = Utility.GetCurrentRealTime()
+    ; the same person grabbed again by the same hand without a drop in between: one hold, not two
+    if ((abIsLeft && _lwLeftHeld == target) || (!abIsLeft && _lwRightHeld == target))
+        LwProbeCount(abIsLeft, 0, 1)
+        return
+    endIf
     string node = HiggsVR.GetGrabbedNodeName(abIsLeft)
     string area = LivingWorldGrabArea(target, abIsLeft)
-    float now = Utility.GetCurrentRealTime()
     ; a hand that grabs again without a drop event: close the previous grab first
     if (abIsLeft)
         if (_lwLeftHeld)
-            LivingWorldRecordGrab(_lwLeftHeld, _lwLeftNode, _lwLeftArea, "L", now - _lwLeftSince)
+            LivingWorldEndHold(_lwLeftHeld, true, now)
         endIf
         _lwLeftHeld = target
         _lwLeftSince = now
@@ -392,13 +401,14 @@ Event OnObjectGrabbed(ObjectReference akRef, bool abIsLeft)
         _lwLeftArea = area
     else
         if (_lwRightHeld)
-            LivingWorldRecordGrab(_lwRightHeld, _lwRightNode, _lwRightArea, "R", now - _lwRightSince)
+            LivingWorldEndHold(_lwRightHeld, false, now)
         endIf
         _lwRightHeld = target
         _lwRightSince = now
         _lwRightNode = node
         _lwRightArea = area
     endIf
+    LwProbeHoldStarted(abIsLeft, target, now, (Utility.GetCurrentRealTime() - now) * 1000.0)
 EndEvent
 
 Event OnObjectDropped(ObjectReference akRef, bool abIsLeft)
@@ -407,14 +417,34 @@ Event OnObjectDropped(ObjectReference akRef, bool abIsLeft)
         return
     endIf
     float now = Utility.GetCurrentRealTime()
-    if (abIsLeft && _lwLeftHeld == target)
-        _lwLeftHeld = None
-        LivingWorldRecordGrab(target, _lwLeftNode, _lwLeftArea, "L", now - _lwLeftSince)
-    elseIf (!abIsLeft && _lwRightHeld == target)
-        _lwRightHeld = None
-        LivingWorldRecordGrab(target, _lwRightNode, _lwRightArea, "R", now - _lwRightSince)
+    if ((abIsLeft && _lwLeftHeld == target) || (!abIsLeft && _lwRightHeld == target))
+        LivingWorldEndHold(target, abIsLeft, now)
     endIf
 EndEvent
+
+; A hold ends: record it (unless it was too short to be a real grab) and report its timing.
+function LivingWorldEndHold(Actor target, bool abIsLeft, float now)
+    LwProbeCount(abIsLeft, 1, 0)
+    float seconds
+    if (abIsLeft)
+        _lwLeftHeld = None
+        seconds = now - _lwLeftSince
+        if (seconds >= LivingWorldMinGrabSeconds)
+            LivingWorldRecordGrab(target, _lwLeftNode, _lwLeftArea, "L", seconds)
+        else
+            _lwPLShort += 1
+        endIf
+    else
+        _lwRightHeld = None
+        seconds = now - _lwRightSince
+        if (seconds >= LivingWorldMinGrabSeconds)
+            LivingWorldRecordGrab(target, _lwRightNode, _lwRightArea, "R", seconds)
+        else
+            _lwPRShort += 1
+        endIf
+    endIf
+    LwProbeHoldEnded(abIsLeft, target, now)
+endFunction
 
 Event OnObjectConsumed(Form akForm, bool abIsLeft)
     _lwLastMouthForm = akForm
@@ -451,7 +481,13 @@ function LivingWorldRecordGrab(Actor target, string node, string area, string ha
     if (part == "")
         part = "body"
     endIf
-    ListenerScript.AddIngameEventToConversation(PlayerRef.GetDisplayName() + " grabbed " + target.GetDisplayName() + " by the " + part + " for " + (seconds as int) + " seconds.")
+    ; at most one such line per person every few seconds, however often HIGGS lets go and grabs again
+    float now = Utility.GetCurrentRealTime()
+    if (target != _lwLastSaidTarget || now - _lwLastSaidAt >= LivingWorldGrabLineCooldown)
+        _lwLastSaidTarget = target
+        _lwLastSaidAt = now
+        ListenerScript.AddIngameEventToConversation(PlayerRef.GetDisplayName() + " grabbed " + target.GetDisplayName() + " by the " + part + " for " + (seconds as int) + " seconds.")
+    endIf
 endFunction
 
 ; Where on the body the player's hand is: "left shoulder", "upper back", "stomach", "right thigh" ...
@@ -811,8 +847,11 @@ function LivingWorldRegisterAttireAndDrink()
     RegisterForModEvent("MantellaConversation_Action_mantella_npc_lw_drink", "OnLivingWorldDrinkLegacy")
     _lwInFight = false
     _lwSwimming = PlayerRef.IsSwimming()
+    _lwProbeOn = false
+    _lwTickDue = 0.0
+    _lwRegularDueAt = Utility.GetCurrentRealTime() + LivingWorldHygienePollSeconds
     if (LivingWorldHygieneOn)
-        RegisterForSingleUpdate(LivingWorldHygienePollSeconds)
+        LwScheduleTick(LivingWorldHygienePollSeconds)
     endIf
 endFunction
 
@@ -890,22 +929,208 @@ function LivingWorldPlayerAttireMaybeChanged(Form item)
     if (!LivingWorldAttireOn || !worn || Math.LogicalAnd(worn.GetSlotMask(), LivingWorldBodySlotMask) == 0)
         return
     endIf
-    RegisterForSingleUpdate(1.0)
+    _lwRegularDueAt = Utility.GetCurrentRealTime() + 1.0
+    if (!_lwProbeOn)   ; while the probe ticks it picks this up on its own
+        LwScheduleTick(1.0)
+    endIf
 endFunction
 
+; One timer for this script: the regular checks (attire, hygiene) every few seconds and, while the player
+; holds someone, the performance probe every half second. Each tick also measures how late it ran.
 Event OnUpdate()
-    if (LivingWorldAttireOn)
-        bool covered = PlayerRef.GetWornForm(LivingWorldBodySlotMask) != None
-        if (covered != _lwPlayerCovered)
-            _lwPlayerCovered = covered
-            LivingWorldQueue(LivingWorldAttireRecord(PlayerRef))
+    float now = Utility.GetCurrentRealTime()
+    float lag = 0.0
+    if (_lwTickDue > 0.0)
+        lag = now - _lwTickDue
+        if (lag > 300.0 || lag < 0.0)   ; a timer left from before a load: not a measurement
+            lag = 0.0
         endIf
     endIf
-    if (LivingWorldHygieneOn)
-        LwHygieneTick()
-        RegisterForSingleUpdate(LivingWorldHygienePollSeconds)
+    _lwTickDue = 0.0
+    if (_lwProbeOn)
+        LwProbeTick(lag)
+    elseIf (lag > LivingWorldStallSeconds && !Utility.IsInMenuMode() && now - _lwLastStallAt > 10.0)
+        _lwLastStallAt = now
+        LivingWorldQueue(LivingWorldHeader("perf") + "|what=stall|rt0=" + (now - lag) + "|lag=" + lag + "|held=0")
+        Debug.Trace("Mantella Living World perf: a script tick ran " + lag + " s late")
+    endIf
+    if (now >= _lwRegularDueAt)
+        if (LivingWorldAttireOn)
+            bool covered = PlayerRef.GetWornForm(LivingWorldBodySlotMask) != None
+            if (covered != _lwPlayerCovered)
+                _lwPlayerCovered = covered
+                LivingWorldQueue(LivingWorldAttireRecord(PlayerRef))
+            endIf
+        endIf
+        if (LivingWorldHygieneOn)
+            LwHygieneTick()
+        endIf
+        _lwRegularDueAt = now + LivingWorldHygienePollSeconds
+    endIf
+    if (_lwProbeOn)
+        LwScheduleTick(LivingWorldProbeSeconds)
+    elseIf (LivingWorldHygieneOn)
+        LwScheduleTick(_lwRegularDueAt - now)
     endIf
 EndEvent
+
+function LwScheduleTick(float delay)
+    if (delay < 0.1)
+        delay = 0.1
+    endIf
+    _lwTickDue = Utility.GetCurrentRealTime() + delay
+    RegisterForSingleUpdate(delay)
+endFunction
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; LIVINGWORLD PATCH: performance probe                                                               ;
+; Only watches. While the player holds someone it ticks every half second and measures how late each ;
+; tick runs; on release it queues one type=perf record for that hold (format: livingworld/perf/      ;
+; game_records.py in MantellaExtension) with how many HIGGS grab and drop events arrived, how many   ;
+; repeats were ignored, and the latest tick. A tick that runs late means the game or its scripts      ;
+; stopped for that long; the server's monitor (MANTELLA_LW_PERF=1) tells which from outside.         ;
+; Outside holds, a regular tick more than LivingWorldStallSeconds late queues a what=stall record.   ;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+bool property LivingWorldProbeOn = true auto hidden
+float property LivingWorldProbeSeconds = 0.5 auto hidden
+float property LivingWorldStallSeconds = 1.0 auto hidden
+
+float _lwTickDue = 0.0
+float _lwRegularDueAt = 0.0
+float _lwLastStallAt = -100.0
+bool _lwProbeOn = false
+; per hand: grab and drop events, repeats ignored, holds too short, ticks, summed and latest lateness,
+; ticks over a second late, grab handler time
+int _lwPLGrabs
+int _lwPLDrops
+int _lwPLDups
+int _lwPLShort
+int _lwPLTicks
+float _lwPLLagSum
+float _lwPLLagMax
+int _lwPLStalls
+float _lwPLGrabMs
+int _lwPRGrabs
+int _lwPRDrops
+int _lwPRDups
+int _lwPRShort
+int _lwPRTicks
+float _lwPRLagSum
+float _lwPRLagMax
+int _lwPRStalls
+float _lwPRGrabMs
+
+function LwProbeHoldStarted(bool abIsLeft, Actor target, float now, float grabMs)
+    if (abIsLeft)
+        _lwPLGrabs = 1
+        _lwPLDrops = 0
+        _lwPLDups = 0
+        _lwPLShort = 0
+        _lwPLTicks = 0
+        _lwPLLagSum = 0.0
+        _lwPLLagMax = 0.0
+        _lwPLStalls = 0
+        _lwPLGrabMs = grabMs
+    else
+        _lwPRGrabs = 1
+        _lwPRDrops = 0
+        _lwPRDups = 0
+        _lwPRShort = 0
+        _lwPRTicks = 0
+        _lwPRLagSum = 0.0
+        _lwPRLagMax = 0.0
+        _lwPRStalls = 0
+        _lwPRGrabMs = grabMs
+    endIf
+    if (LivingWorldProbeOn && !_lwProbeOn)
+        _lwProbeOn = true
+        LwScheduleTick(LivingWorldProbeSeconds)
+    endIf
+endFunction
+
+function LwProbeCount(bool abIsLeft, int drops, int dups)
+    if (abIsLeft)
+        _lwPLDrops += drops
+        _lwPLDups += dups
+    else
+        _lwPRDrops += drops
+        _lwPRDups += dups
+    endIf
+endFunction
+
+function LwProbeTick(float lag)
+    if (lag < 0.0)
+        lag = 0.0
+    endIf
+    if (_lwLeftHeld)
+        _lwPLTicks += 1
+        _lwPLLagSum += lag
+        if (lag > _lwPLLagMax)
+            _lwPLLagMax = lag
+        endIf
+        if (lag > LivingWorldStallSeconds)
+            _lwPLStalls += 1
+        endIf
+    endIf
+    if (_lwRightHeld)
+        _lwPRTicks += 1
+        _lwPRLagSum += lag
+        if (lag > _lwPRLagMax)
+            _lwPRLagMax = lag
+        endIf
+        if (lag > LivingWorldStallSeconds)
+            _lwPRStalls += 1
+        endIf
+    endIf
+    if (lag > LivingWorldStallSeconds)
+        Debug.Trace("Mantella Living World perf: a probe tick ran " + lag + " s late while holding someone")
+    endIf
+    if (!_lwLeftHeld && !_lwRightHeld)
+        _lwProbeOn = false
+    endIf
+endFunction
+
+function LwProbeHoldEnded(bool abIsLeft, Actor target, float now)
+    if (!LivingWorldProbeOn)
+        return
+    endIf
+    string hand = "R"
+    float since = _lwRightSince
+    int grabs = _lwPRGrabs
+    int drops = _lwPRDrops
+    int dups = _lwPRDups
+    int shortHolds = _lwPRShort
+    int ticks = _lwPRTicks
+    float lagSum = _lwPRLagSum
+    float lagMax = _lwPRLagMax
+    int stalls = _lwPRStalls
+    float grabMs = _lwPRGrabMs
+    if (abIsLeft)
+        hand = "L"
+        since = _lwLeftSince
+        grabs = _lwPLGrabs
+        drops = _lwPLDrops
+        dups = _lwPLDups
+        shortHolds = _lwPLShort
+        ticks = _lwPLTicks
+        lagSum = _lwPLLagSum
+        lagMax = _lwPLLagMax
+        stalls = _lwPLStalls
+        grabMs = _lwPLGrabMs
+    endIf
+    float lagAvg = 0.0
+    if (ticks > 0)
+        lagAvg = lagSum / ticks
+    endIf
+    LivingWorldQueue(LivingWorldHeader("perf") + "|what=grab|hand=" + hand + "|target=" + target.GetDisplayName() + "|rt0=" + since + "|rt1=" + now + "|grabs=" + grabs + "|drops=" + drops + "|dups=" + dups + "|short=" + shortHolds + "|ticks=" + ticks + "|lag_avg=" + lagAvg + "|lag_max=" + lagMax + "|stalls=" + stalls + "|grab_ms=" + grabMs)
+    if (!_lwLeftHeld && !_lwRightHeld)
+        _lwProbeOn = false
+        if (LivingWorldHygieneOn)
+            LwScheduleTick(_lwRegularDueAt - now)
+        endIf
+    endIf
+endFunction
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; LIVINGWORLD PATCH: hygiene (H1)                                                                    ;
