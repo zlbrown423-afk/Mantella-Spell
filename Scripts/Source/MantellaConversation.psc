@@ -182,6 +182,9 @@ function ContinueConversation(string nextAction, int handle)
         if(SKSE_HTTP.hasKey(handle, "mantella_lw_quiet_chatter") && SKSE_HTTP.getBool(handle, "mantella_lw_quiet_chatter", false)) ; LIVINGWORLD PATCH
             repository.LivingWorldMuteChatter() ; no vanilla hellos or idle chatter until the conversation ends
         endif
+        if(SKSE_HTTP.hasKey(handle, "mantella_lw_body_on")) ; LIVINGWORLD PATCH: body language (BL1) on or off
+            repository.LivingWorldSetBodyLanguage(SKSE_HTTP.getBool(handle, "mantella_lw_body_on", true))
+        endif
         ;Debug.Notification("Conversation started.")
         RequestContinueConversation()
     elseIf(nextAction == mConsts.KEY_REPLYTYPE_NPCTALK)
@@ -339,6 +342,9 @@ function ProcessNpcSpeak(int handle)
             _lastTopicInfo = topicID
         endIf
     endIf
+    if(SKSE_HTTP.hasKey(handle, "mantella_lw_body")) ; LIVINGWORLD PATCH: body language (BL1), expression profiles that changed
+        repository.LivingWorldBodyProfiles(SKSE_HTTP.getStringArray(handle, "mantella_lw_body"), self)
+    endif
     if(SKSE_HTTP.hasKey(handle, "mantella_lw_mood")) ; LIVINGWORLD PATCH: mood meter, sent when the NPC's mood changes
         Debug.Notification(SKSE_HTTP.getString(handle, "mantella_lw_mood", ""))
     endif
