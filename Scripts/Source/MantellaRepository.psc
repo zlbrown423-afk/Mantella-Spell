@@ -2902,6 +2902,10 @@ function LwRecordHit(Actor victim, Form hitSource, string via)  ; not 'weapon': 
     if (via != "assault" && victim.IsHostileToActor(PlayerRef))
         return   ; fighting an enemy is not news
     endIf
+    Spell castSpell = hitSource as Spell
+    if (castSpell && !castSpell.IsHostile())
+        return   ; an animation, expression or test spell cast on someone is not an attack
+    endIf
     float now = Utility.GetCurrentRealTime()
     if (victim == _lwLastHit && now - _lwLastHitAt < LwHitCooldownSeconds)
         return

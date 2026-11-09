@@ -119,7 +119,12 @@ Event OnHit(ObjectReference akAggressor, Form akSource, Projectile akProjectile,
                 ; Do not save event if Mantella itself is cast
             else
                 ;Debug.MessageBox(aggressor + " hit "+selfName+" with a(n) " + hitSource)
-                AddIngameEventToConversation(aggressor + " hit "+selfName+" with " + hitSource)
+                Spell castSpell = akSource as Spell ; LIVINGWORLD PATCH: a harmless spell is not a hit
+                if (castSpell && !castSpell.IsHostile())
+                    AddIngameEventToConversation(aggressor + " cast " + hitSource + " on " + selfName)
+                else
+                    AddIngameEventToConversation(aggressor + " hit "+selfName+" with " + hitSource)
+                endIf
             endIf
         else
             timesHitSameAggressorSource += 1
