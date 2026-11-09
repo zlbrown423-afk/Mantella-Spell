@@ -366,6 +366,15 @@ function ProcessNpcSpeak(int handle)
     if(SKSE_HTTP.hasKey(handle, "mantella_lw_guard_chest_id")) ; LIVINGWORLD PATCH: guard careers, a footlocker by the bunk
         repository.LivingWorldGuardChest(SKSE_HTTP.getInt(handle, "mantella_lw_guard_chest_id"), SKSE_HTTP.getString(handle, "mantella_lw_guard_chest_plugin", "Skyrim.esm"))
     endif
+    if(SKSE_HTTP.hasKey(handle, "mantella_lw_guard_arrest_name")) ; LIVINGWORLD PATCH: guard careers G2f, someone the player arrested
+        Actor lwArrested = GetActorByName(SKSE_HTTP.getString(handle, "mantella_lw_guard_arrest_name", ""))
+        if (lwArrested)
+            repository.LivingWorldArrest(lwArrested, SKSE_HTTP.getString(handle, "mantella_lw_guard_arrest_mode", "submit"), SKSE_HTTP.getInt(handle, "mantella_lw_guard_arrest_id"), SKSE_HTTP.getFloat(handle, "mantella_lw_guard_arrest_days", 1.0), SKSE_HTTP.getInt(handle, "mantella_lw_guard_jail_id", 0), SKSE_HTTP.getString(handle, "mantella_lw_guard_jail_plugin", "Skyrim.esm"))
+        endIf
+    endif
+    if(SKSE_HTTP.hasKey(handle, "mantella_lw_guard_release")) ; LIVINGWORLD PATCH: guard careers G2f, prisoners let out
+        repository.LivingWorldRelease(SKSE_HTTP.getIntArray(handle, "mantella_lw_guard_release"))
+    endif
     if(SKSE_HTTP.hasKey(handle, "mantella_lw_guard_issue_ids")) ; LIVINGWORLD PATCH: guard careers, the uniform a guard leader hands over
         int[] lwIssueCounts ; LIVINGWORLD PATCH: G2 wages, how many of each (gold)
         if(SKSE_HTTP.hasKey(handle, "mantella_lw_guard_issue_counts"))

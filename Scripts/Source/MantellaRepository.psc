@@ -1232,6 +1232,194 @@ function LivingWorldGuardChestRetry()
     endIf
 endFunction
 
+;; LIVINGWORLD PATCH: guard careers G2f, arrests. The server's rules decide what someone the player arrests does:
+;; 'submit' = they follow the player (as a follower) until the player brings them into the jail cell, where they
+;; are put behind the cell door at the jail's prisoner marker and kept there until their days are served;
+;; 'flee' = they lose their nerve and run; 'fight' = they turn on the player. Each locking up and letting out is
+;; queued for the server as a 'jail' record (task = the arrest). Up to 4 prisoners at a time.
+int property LivingWorldJailId = 0 auto hidden
+string property LivingWorldJailPlugin = "Skyrim.esm" auto hidden
+float property LivingWorldEscortDays = 1.0 auto hidden     ; not brought in by then: they slip away
+float property LivingWorldResistDays = 0.1 auto hidden     ; how long a runner stays without nerve
+Actor[] _lwPrisoner
+int[] _lwPrisonerArrest
+int[] _lwPrisonerState        ; 1 = escorted, 2 = in the cell, 3 = resisting (flee)
+float[] _lwPrisonerUntil      ; game days (+1, as the records' gt): escort/resist runs out, or the sentence ends
+float[] _lwPrisonerDays
+float[] _lwPrisonerNerve      ; a runner's own Confidence, given back afterwards
+
+function LwPrisonerArrays()
+    if (!_lwPrisoner)
+        _lwPrisoner = new Actor[4]
+        _lwPrisonerArrest = new int[4]
+        _lwPrisonerState = new int[4]
+        _lwPrisonerUntil = new float[4]
+        _lwPrisonerDays = new float[4]
+        _lwPrisonerNerve = new float[4]
+    endIf
+endFunction
+
+int function LwPrisonerSlot(Actor npc)
+    LwPrisonerArrays()
+    int i = _lwPrisoner.Find(npc)
+    if (i < 0)
+        i = _lwPrisoner.Find(None)
+    endIf
+    return i
+endFunction
+
+ObjectReference function LwJailMarker()
+    if (LivingWorldJailId == 0)
+        return None
+    endIf
+    return Game.GetFormFromFile(LivingWorldJailId, LivingWorldJailPlugin) as ObjectReference
+endFunction
+
+function LivingWorldArrest(Actor npc, string mode, int arrestId, float days, int jailId, string jailPlugin)
+    if (!npc || npc == PlayerRef || npc.IsDead())
+        return
+    endIf
+    if (jailId != 0)
+        LivingWorldJailId = jailId
+        LivingWorldJailPlugin = jailPlugin
+    endIf
+    float now = Utility.GetCurrentGameTime() + 1.0
+    if (mode == "fight")
+        Debug.Notification(npc.GetDisplayName() + " fights back!")
+        npc.StartCombat(PlayerRef)
+        return
+    endIf
+    int slot = LwPrisonerSlot(npc)
+    if (slot < 0)
+        Debug.Notification("The cells are full: " + npc.GetDisplayName() + " cannot be held.")
+        return
+    endIf
+    _lwPrisoner[slot] = npc
+    _lwPrisonerArrest[slot] = arrestId
+    _lwPrisonerDays[slot] = days
+    if (mode == "flee")
+        _lwPrisonerState[slot] = 3
+        _lwPrisonerUntil[slot] = now + LivingWorldResistDays
+        _lwPrisonerNerve[slot] = npc.GetBaseActorValue("Confidence")
+        Debug.Notification(npc.GetDisplayName() + " runs for it!")
+        npc.SetActorValue("Confidence", 0)
+        npc.StartCombat(PlayerRef)
+        return
+    endIf
+    _lwPrisonerState[slot] = 1
+    _lwPrisonerUntil[slot] = now + LivingWorldEscortDays
+    npc.StopCombat()
+    npc.SetActorValue("WaitingForPlayer", 0)
+    if (npc.GetRelationshipRank(PlayerRef) != 4)
+        npc.SetFactionRank(giafac_following, 1)
+        gia_FollowerQst.Reset()
+        gia_FollowerQst.Stop()
+        Utility.Wait(0.5)
+        gia_FollowerQst.Start()
+    endIf
+    npc.EvaluatePackage()
+    ObjectReference marker = LwJailMarker()
+    string where = "the cells"
+    if (marker && marker.GetParentCell())
+        where = marker.GetParentCell().GetName()
+    endIf
+    Debug.Notification(npc.GetDisplayName() + " is under arrest. Take them to " + where + ".")
+endFunction
+
+function LwJailRecord(int slot, string via)
+    Actor npc = _lwPrisoner[slot]
+    LivingWorldQueue(LivingWorldHeader("jail") + "|actor=" + LivingWorldActorField(PlayerRef) + "|target=" + LivingWorldActorField(npc) + "|via=" + via + "|task=" + _lwPrisonerArrest[slot])
+endFunction
+
+function LwPrisonerClear(int slot)
+    _lwPrisoner[slot] = None
+    _lwPrisonerArrest[slot] = 0
+    _lwPrisonerState[slot] = 0
+endFunction
+
+function LwPrisonerOut(int slot, string why)
+    Actor npc = _lwPrisoner[slot]
+    if (npc && !npc.IsDead())
+        if (_lwPrisonerState[slot] == 1)
+            MantellaFollowerUtils.DismissFollower(npc, gia_FollowerQst, giafac_following)
+        endIf
+        if (_lwPrisonerState[slot] == 2)
+            npc.MoveToMyEditorLocation()
+            npc.EvaluatePackage()
+        endIf
+        if (why != "")
+            Debug.Notification(npc.GetDisplayName() + why)
+        endIf
+        LwJailRecord(slot, "released")
+    endIf
+    LwPrisonerClear(slot)
+endFunction
+
+; From the listener's update tick: lock up a prisoner the player has brought into the jail's cell block, keep
+; prisoners in their cell, let them out when their time is served, and give runners their nerve back.
+function LivingWorldJailTick()
+    if (!_lwPrisoner)
+        return
+    endIf
+    float now = Utility.GetCurrentGameTime() + 1.0
+    ObjectReference marker = LwJailMarker()
+    Cell jailCell = None
+    if (marker)
+        jailCell = marker.GetParentCell()
+    endIf
+    int i = 0
+    while (i < _lwPrisoner.Length)
+        Actor npc = _lwPrisoner[i]
+        int st = _lwPrisonerState[i]
+        if (npc && npc.IsDead())
+            LwPrisonerClear(i)
+        elseIf (npc && st == 3)
+            if (now >= _lwPrisonerUntil[i])
+                npc.SetActorValue("Confidence", _lwPrisonerNerve[i])
+                LwPrisonerClear(i)
+            endIf
+        elseIf (npc && st == 1)
+            if (jailCell && PlayerRef.GetParentCell() == jailCell && npc.GetParentCell() == jailCell)
+                MantellaFollowerUtils.DismissFollower(npc, gia_FollowerQst, giafac_following)
+                npc.MoveTo(marker)
+                npc.EvaluatePackage()
+                _lwPrisonerState[i] = 2
+                _lwPrisonerUntil[i] = now + _lwPrisonerDays[i]
+                Debug.Notification(npc.GetDisplayName() + " is locked in a cell.")
+                LwJailRecord(i, "jailed")
+            elseIf (now >= _lwPrisonerUntil[i])
+                LwPrisonerOut(i, " slipped away.")
+            endIf
+        elseIf (npc && st == 2)
+            if (now >= _lwPrisonerUntil[i])
+                string note = ""
+                if (PlayerRef.GetParentCell() == jailCell)
+                    note = " has served their time."
+                endIf
+                LwPrisonerOut(i, note)
+            elseIf (marker && (npc.GetParentCell() != jailCell || npc.GetDistance(marker) > 600.0) && !npc.IsInCombat())
+                npc.MoveTo(marker)   ; back behind the cell door
+            endIf
+        endIf
+        i += 1
+    endWhile
+endFunction
+
+; The server lets prisoners out (a wrongful arrest the superior undid).
+function LivingWorldRelease(int[] arrestIds)
+    if (!_lwPrisoner || !arrestIds)
+        return
+    endIf
+    int k = 0
+    while (k < arrestIds.Length)
+        int slot = _lwPrisonerArrest.Find(arrestIds[k])
+        if (slot >= 0 && arrestIds[k] != 0)
+            LwPrisonerOut(slot, " is let out.")
+        endIf
+        k += 1
+    endWhile
+endFunction
+
 function LivingWorldGuardBed(int id, string plugin, bool own)
     LivingWorldBedId = id
     LivingWorldBedPlugin = plugin
