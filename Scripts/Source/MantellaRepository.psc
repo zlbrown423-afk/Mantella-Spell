@@ -960,6 +960,42 @@ string[] function LivingWorldThaneOf()
     return Utility.ResizeStringArray(found, n)
 endFunction
 
+;; LIVINGWORLD PATCH: guard careers G2, the barracks bunk. The server names one bed reference; while the
+;; player serves it is owned by the player (sleep there without trespassing), and unowned again after.
+;; A bed in an unloaded cell cannot be reached, so it is kept pending and retried on location change and
+;; on the listener's update tick until the player is near it.
+int property LivingWorldBedId = 0 auto hidden
+string property LivingWorldBedPlugin = "" auto hidden
+int property LivingWorldBedOwn = -1 auto hidden   ; pending: 1 = give, 0 = take back, -1 = nothing pending
+
+function LivingWorldGuardBed(int id, string plugin, bool own)
+    LivingWorldBedId = id
+    LivingWorldBedPlugin = plugin
+    if (own)
+        LivingWorldBedOwn = 1
+    else
+        LivingWorldBedOwn = 0
+    endIf
+    LivingWorldGuardBedRetry()
+endFunction
+
+function LivingWorldGuardBedRetry()
+    if (LivingWorldBedOwn < 0 || LivingWorldBedId == 0)
+        return
+    endIf
+    ObjectReference bed = Game.GetFormFromFile(LivingWorldBedId, LivingWorldBedPlugin) as ObjectReference
+    if (!bed)
+        return   ; its cell is not loaded yet
+    endIf
+    if (LivingWorldBedOwn == 1)
+        bed.SetActorOwner(PlayerRef.GetActorBase())
+        Debug.Notification("Your bunk in the barracks is ready.")
+    else
+        bed.SetActorOwner(None)
+    endIf
+    LivingWorldBedOwn = -1
+endFunction
+
 function LivingWorldGuardIssue(int[] ids, string[] plugins, int[] counts = None)
     ; counts (optional): how many of each, e.g. the gold for a guard's wages; default 1
     if (!ids)

@@ -294,6 +294,7 @@ Actor[] Function ScanNearbyActors()
 EndFunction
 
 event OnUpdate()
+    repository.LivingWorldGuardBedRetry() ; LIVINGWORLD PATCH: guard careers, a pending barracks bunk
     ; If no Mantella conversation active
     if !conversation.IsRunning()
         if repository.radiantEnabled || repository.approachEnabled
@@ -488,6 +489,7 @@ EndEvent
 
 
 Event OnLocationChange(Location akOldLoc, Location akNewLoc)
+    repository.LivingWorldGuardBedRetry() ; LIVINGWORLD PATCH: guard careers, a pending barracks bunk
     ; check if radiant dialogue is playing, and end conversation if the player leaves the area
     If (conversation.IsRunning() && !conversation.IsPlayerInConversation())
         conversation.EndConversation()
