@@ -350,8 +350,14 @@ function ProcessNpcSpeak(int handle)
             h += 1
         endWhile
     endif
+    if(SKSE_HTTP.hasKey(handle, "mantella_lw_guard_watch_task")) ; LIVINGWORLD PATCH: guard careers G2e, the shift's watch windows
+        repository.LivingWorldGuardWatch(SKSE_HTTP.getInt(handle, "mantella_lw_guard_watch_task"), SKSE_HTTP.getFloat(handle, "mantella_lw_guard_watch_end"), SKSE_HTTP.getFloatArray(handle, "mantella_lw_guard_watch_at"), SKSE_HTTP.getIntArray(handle, "mantella_lw_guard_watch_win"), SKSE_HTTP.getIntArray(handle, "mantella_lw_guard_watch_kind"), SKSE_HTTP.getStringArray(handle, "mantella_lw_guard_watch_obs"), SKSE_HTTP.getFloat(handle, "mantella_lw_guard_watch_cooldown", 3.0))
+    endif
     if(SKSE_HTTP.hasKey(handle, "mantella_lw_guard_bed_id")) ; LIVINGWORLD PATCH: guard careers, the barracks bunk
         repository.LivingWorldGuardBed(SKSE_HTTP.getInt(handle, "mantella_lw_guard_bed_id"), SKSE_HTTP.getString(handle, "mantella_lw_guard_bed_plugin", "Skyrim.esm"), SKSE_HTTP.getBool(handle, "mantella_lw_guard_bed_own"))
+    endif
+    if(SKSE_HTTP.hasKey(handle, "mantella_lw_guard_chest_id")) ; LIVINGWORLD PATCH: guard careers, a footlocker by the bunk
+        repository.LivingWorldGuardChest(SKSE_HTTP.getInt(handle, "mantella_lw_guard_chest_id"), SKSE_HTTP.getString(handle, "mantella_lw_guard_chest_plugin", "Skyrim.esm"))
     endif
     if(SKSE_HTTP.hasKey(handle, "mantella_lw_guard_issue_ids")) ; LIVINGWORLD PATCH: guard careers, the uniform a guard leader hands over
         int[] lwIssueCounts ; LIVINGWORLD PATCH: G2 wages, how many of each (gold)

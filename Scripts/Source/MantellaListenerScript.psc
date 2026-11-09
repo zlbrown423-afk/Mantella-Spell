@@ -293,8 +293,36 @@ Actor[] Function ScanNearbyActors()
     return nearbyActors
 EndFunction
 
+; LIVINGWORLD PATCH: guard careers G2e. A watch window of the player's guard shift is due: have a nearby person
+; come over (as an NPC approach does) or, with nobody suitable near, let the player notice something.
+function LivingWorldWatchTick()
+    int slot = repository.LivingWorldWatchDue()
+    if (slot < 0 || conversation.IsRunning() || PlayerRef.IsInCombat())
+        return
+    endIf
+    Actor chosen = None
+    if (repository.LivingWorldWatchWantsSomeone(slot))
+        MantellaActorPicker.start()
+        chosen = repository.LivingWorldWatchPick(CollectEligibleActors(PlayerRef, ConvertMeterToGameUnits(25.0)))
+        MantellaActorPicker.stop()
+    endIf
+    repository.LivingWorldWatchRecord(slot, chosen)
+    if (chosen)
+        AddToCooldown(chosen)
+        Actor[] actors = new Actor[2]
+        actors[0] = PlayerRef
+        actors[1] = chosen
+        conversation.Start()
+        Debug.Notification(chosen.GetDisplayName() + " comes over to you.")
+        conversation.AddIngameEvent(chosen.GetDisplayName() + " comes over to " + getPlayerName(False) + ", who is on guard duty.")
+        conversation.StartConversation(actors)
+        conversation.TriggerApproachMoveAction(chosen)
+    endIf
+endFunction
+
 event OnUpdate()
     repository.LivingWorldGuardBedRetry() ; LIVINGWORLD PATCH: guard careers, a pending barracks bunk
+    LivingWorldWatchTick() ; LIVINGWORLD PATCH: guard careers G2e, someone comes over on the player's shift
     ; If no Mantella conversation active
     if !conversation.IsRunning()
         if repository.radiantEnabled || repository.approachEnabled
