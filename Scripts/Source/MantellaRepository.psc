@@ -361,11 +361,45 @@ Actor _lwLastSaidTarget
 float _lwLastSaidAt
 bool _lwAreaBusy = false
 
+; LIVINGWORLD PATCH: reactions on the spot. Outside a conversation, someone the player grabs against their will
+; speaks up (a Mantella conversation starts with them), and a guard who saw it comes over to step in. The server
+; decides what they say (guard/peace.py: a warning first, an arrest once guards have had to step in before).
+bool property LivingWorldReactOn = true auto hidden
+float property LivingWorldReactHoldSeconds = 5.0 auto hidden   ; a hold this long gets a reaction while still held
+float property LivingWorldReactMinSeconds = 2.0 auto hidden    ; shorter, on a shoulder or arm: let it pass
+float property LivingWorldReactCooldown = 60.0 auto hidden     ; the same person reacts again only after this
+float property LivingWorldReactAnyCooldown = 15.0 auto hidden  ; and nobody reacts within this of the last one
+float property LivingWorldReactGuardMeters = 20.0 auto hidden  ; a guard further than this did not really see it
+Actor _lwSawGuard
+float _lwSawGuardMeters
+Actor _lwPendingTarget
+Actor _lwPendingGuard
+string _lwPendingArea
+float _lwPendingSeconds
+bool _lwPendingHeld
+Actor _lwReactedLast
+float _lwReactedLastAt = -1000.0
+float _lwReactedAnyAt = -1000.0
+bool _lwLeftReacted
+bool _lwRightReacted
+
+; Walking away ends the conversation: Mantella only ends one when the player says goodbye or uses the
+; end spell, so walking off left it running, and the next NPC the player spoke to was added to it.
+bool property LivingWorldWalkAwayOn = true auto hidden
+float property LivingWorldWalkAwayMeters = 12.0 auto hidden   ; further than this from every NPC in it
+float property LivingWorldWalkAwaySeconds = 4.0 auto hidden   ; for this long
+int _lwWalkWatch = 0
+
 ; Called on every game load (HIGGS registrations are not kept in the save).
 function LivingWorldRegisterPerception()
     _lwLeftHeld = None
     _lwRightHeld = None
     _lwAreaBusy = false
+    _lwPendingTarget = None
+    RegisterForModEvent("LivingWorld_ReactNow", "OnLivingWorldReactNow")       ; reactions on the spot, each
+    RegisterForModEvent("LivingWorld_HoldCheck", "OnLivingWorldHoldCheck")     ; on its own stack, off HIGGS's
+    RegisterForModEvent("LivingWorld_WalkAway", "OnLivingWorldWalkAway")       ; end a conversation the player left
+    LivingWorldWatchWalkAway() ; a conversation running across a save load is watched again
     if (SKSE.GetPluginVersion("HIGGS") > 0)
         HiggsVR.RegisterForGrabEvent(self)
         HiggsVR.RegisterForDropEvent(self)
@@ -404,11 +438,16 @@ Event OnObjectGrabbed(ObjectReference akRef, bool abIsLeft)
         _lwLeftSince = now
         _lwLeftNode = ""
         _lwLeftArea = ""
+        _lwLeftReacted = false
     else
         _lwRightHeld = target
         _lwRightSince = now
         _lwRightNode = ""
         _lwRightArea = ""
+        _lwRightReacted = false
+    endIf
+    if (LivingWorldReactOn)
+        SendModEvent("LivingWorld_HoldCheck") ; still holding on in a few seconds: they speak up
     endIf
     LwProbeHoldStarted(abIsLeft, target, now, 0.0)
     string node = HiggsVR.GetGrabbedNodeName(abIsLeft)
@@ -510,8 +549,14 @@ endFunction
 
 function LivingWorldRecordGrab(Actor target, string node, string area, string hand, float seconds)
     string rec = LivingWorldHeader("grab") + "|actor=" + LivingWorldActorField(PlayerRef) + "|target=" + LivingWorldActorField(target) + "|node=" + node + "|area=" + area + "|hand=" + hand + "|dur=" + seconds + "|trank=" + target.GetRelationshipRank(PlayerRef)
+    _lwSawGuard = None
+    _lwSawGuardMeters = 1000.0
     rec += LivingWorldWitnesses(PlayerRef, target)
     LivingWorldQueue(rec)
+    bool reacted = (hand == "L" && _lwLeftReacted) || (hand == "R" && _lwRightReacted)
+    if (!reacted)
+        LivingWorldMaybeReact(target, area, seconds, false, _lwSawGuard)
+    endIf
     ; let a running conversation react straight away, as Mantella's own events do.
     ; Never the raw node name: "NPC Spine1 [Spn1]" made NPCs say they were grabbed by the spine.
     string part = area
@@ -524,6 +569,180 @@ function LivingWorldRecordGrab(Actor target, string node, string area, string ha
         _lwLastSaidTarget = target
         _lwLastSaidAt = now
         ListenerScript.AddIngameEventToConversation(PlayerRef.GetDisplayName() + " grabbed " + target.GetDisplayName() + " by the " + part + " for " + (seconds as int) + " seconds.")
+    endIf
+endFunction
+
+; LIVINGWORLD PATCH: reactions on the spot (see the properties above). Rules only, here in the game: a quick hand on
+; a shoulder or an arm passes; a hold of a few seconds, a long hold, or a hand on the face, neck, chest, hips or
+; backside gets a reaction. People with a close bond (relationship rank 3+) only react to the sensitive or the long.
+bool function LivingWorldSensitiveArea(string area)
+    return StringUtil.Find(area, "face") >= 0 || StringUtil.Find(area, "head") >= 0 || StringUtil.Find(area, "neck") >= 0 || StringUtil.Find(area, "chest") >= 0 || StringUtil.Find(area, "hips") >= 0 || StringUtil.Find(area, "backside") >= 0
+endFunction
+
+function LivingWorldMaybeReact(Actor target, string area, float seconds, bool stillHeld, Actor guard)
+    if (!LivingWorldReactOn || !target || target.IsDead() || target.IsChild() || target.IsInCombat() || PlayerRef.IsInCombat())
+        return
+    endIf
+    if (ListenerScript.conversation.IsRunning() || _lwPendingTarget)
+        return   ; in a conversation the "X grabbed Y" line already lets them react
+    endIf
+    bool sensitive = LivingWorldSensitiveArea(area)
+    bool isLong = seconds >= LivingWorldReactHoldSeconds
+    if (!sensitive && !isLong && seconds < LivingWorldReactMinSeconds)
+        return
+    endIf
+    if (target.GetRelationshipRank(PlayerRef) >= 3 && !sensitive && seconds < 20.0)
+        return
+    endIf
+    float now = Utility.GetCurrentRealTime()
+    if (now - _lwReactedAnyAt < LivingWorldReactAnyCooldown || (target == _lwReactedLast && now - _lwReactedLastAt < LivingWorldReactCooldown))
+        return
+    endIf
+    _lwPendingTarget = target
+    _lwPendingGuard = None
+    if (guard && guard != target && (sensitive || isLong))
+        _lwPendingGuard = guard
+    endIf
+    _lwPendingArea = area
+    _lwPendingSeconds = seconds
+    _lwPendingHeld = stillHeld
+    SendModEvent("LivingWorld_ReactNow") ; start it outside the HIGGS event
+endFunction
+
+Event OnLivingWorldReactNow(string eventName, string strArg, float numArg, Form sender)
+    if (_lwPendingTarget)
+        LivingWorldReactNow()
+    endIf
+EndEvent
+
+; a hand still holding someone long enough: they speak up while held
+; Called when a conversation starts. Each call starts a fresh watch; an older one sees the newer token and stops.
+function LivingWorldWatchWalkAway()
+    if (LivingWorldWalkAwayOn)
+        _lwWalkWatch += 1
+        SendModEvent("LivingWorld_WalkAway", "", _lwWalkWatch as float)
+    endIf
+endFunction
+
+Event OnLivingWorldWalkAway(string eventName, string strArg, float numArg, Form sender)
+    int token = numArg as int
+    MantellaConversation conv = ListenerScript.conversation
+    float away = 0.0
+    while (token == _lwWalkWatch && conv.IsRunning())
+        Utility.Wait(1.0)
+        if (conv.IsPlayerInConversation() && LivingWorldPlayerLeft(conv))
+            away += 1.0
+            if (away >= LivingWorldWalkAwaySeconds && token == _lwWalkWatch && conv.IsRunning())
+                _lwWalkWatch += 1 ; this watch is done
+                Debug.Notification("You walked away. Conversation ending...")
+                conv.EndConversation()
+                return
+            endIf
+        else
+            away = 0.0
+        endIf
+    endWhile
+EndEvent
+
+; True when every NPC in the conversation is out of earshot: far away, in another cell, or gone.
+bool function LivingWorldPlayerLeft(MantellaConversation conv)
+    int n = conv.Participants.GetSize()
+    int i = 0
+    bool anyNpc = false
+    while (i < n)
+        Actor a = conv.Participants.GetAt(i) as Actor
+        if (a && a != PlayerRef)
+            anyNpc = true
+            if (!a.IsDead() && a.GetParentCell() && a.GetParentCell().IsAttached() && a.GetDistance(PlayerRef) / 71.0210 <= LivingWorldWalkAwayMeters)
+                return false
+            endIf
+        endIf
+        i += 1
+    endWhile
+    return anyNpc
+endFunction
+
+; True when the target is far from every NPC already in the conversation (the player has moved on).
+bool function LivingWorldFarFromConversation(MantellaConversation conv, Actor target)
+    if (!LivingWorldWalkAwayOn || !target || !conv.IsPlayerInConversation())
+        return false
+    endIf
+    int n = conv.Participants.GetSize()
+    int i = 0
+    while (i < n)
+        Actor a = conv.Participants.GetAt(i) as Actor
+        if (a && a != PlayerRef && a != target && a.GetParentCell() && a.GetParentCell().IsAttached() && a.GetDistance(target) / 71.0210 <= LivingWorldWalkAwayMeters)
+            return false
+        endIf
+        i += 1
+    endWhile
+    return true
+endFunction
+
+Event OnLivingWorldHoldCheck(string eventName, string strArg, float numArg, Form sender)
+    Utility.Wait(LivingWorldReactHoldSeconds + 0.2)
+    float now = Utility.GetCurrentRealTime()
+    if (_lwLeftHeld && !_lwLeftReacted && now - _lwLeftSince >= LivingWorldReactHoldSeconds)
+        _lwLeftReacted = true
+        LivingWorldMaybeReact(_lwLeftHeld, _lwLeftArea, now - _lwLeftSince, true, None)
+    elseIf (_lwRightHeld && !_lwRightReacted && now - _lwRightSince >= LivingWorldReactHoldSeconds)
+        _lwRightReacted = true
+        LivingWorldMaybeReact(_lwRightHeld, _lwRightArea, now - _lwRightSince, true, None)
+    endIf
+EndEvent
+
+function LivingWorldReactNow()
+    Actor target = _lwPendingTarget
+    Actor guard = _lwPendingGuard
+    string area = _lwPendingArea
+    float seconds = _lwPendingSeconds
+    bool held = _lwPendingHeld
+    _lwPendingTarget = None
+    _lwPendingGuard = None
+    MantellaConversation conv = ListenerScript.conversation
+    if (!target || target.IsDead() || conv.IsRunning())
+        return
+    endIf
+    float now = Utility.GetCurrentRealTime()
+    _lwReactedAnyAt = now
+    _lwReactedLast = target
+    _lwReactedLastAt = now
+    string part = area
+    if (part == "")
+        part = "body"
+    endIf
+    LivingWorldQueue(LivingWorldHeader("react") + "|actor=" + LivingWorldActorField(target) + "|target=" + LivingWorldActorField(PlayerRef) + "|via=victim|area=" + area + "|dur=" + seconds)
+    if (guard)
+        LivingWorldQueue(LivingWorldHeader("react") + "|actor=" + LivingWorldActorField(guard) + "|target=" + LivingWorldActorField(PlayerRef) + "|via=guard|party=" + LivingWorldActorField(target) + "|area=" + area + "|dur=" + seconds)
+    endIf
+    string who = target.GetDisplayName()
+    string player = PlayerRef.GetDisplayName()
+    string ev
+    if (held)
+        ev = player + " has hold of " + who + " by the " + part + " and will not let go. " + who + " speaks up about it right now."
+    else
+        ev = who + " pulls away from " + player + ", who just grabbed them by the " + part + " for " + (seconds as int) + " seconds. " + who + " speaks up about it right now."
+    endIf
+    Actor[] actors
+    if (guard)
+        actors = new Actor[3]
+        actors[2] = guard
+        ev += " " + guard.GetDisplayName() + ", a guard, saw it and comes over to step in."
+    else
+        actors = new Actor[2]
+    endIf
+    actors[0] = PlayerRef
+    actors[1] = target
+    conv.Start()
+    if (guard)
+        Debug.Notification(guard.GetDisplayName() + " saw that and comes over.")
+    else
+        Debug.Notification(who + " reacts.")
+    endIf
+    conv.AddIngameEvent(ev)
+    conv.StartConversation(actors)
+    if (guard)
+        conv.TriggerApproachMoveAction(guard)
     endIf
 endFunction
 
@@ -875,6 +1094,10 @@ string function LivingWorldWitnesses(Actor doer, Actor target)
                 string los = "0"
                 if (w.HasLOS(center) || w.HasLOS(doer))
                     los = "1"
+                    if (meters <= LivingWorldReactGuardMeters && meters < _lwSawGuardMeters && w.IsGuard() && !w.IsInCombat())
+                        _lwSawGuard = w
+                        _lwSawGuardMeters = meters
+                    endIf
                 endIf
                 string rankTarget = ""
                 if (target)
@@ -2750,6 +2973,10 @@ function LwRecordHit(Actor victim, Form hitSource, string via)  ; not 'weapon': 
     endIf
     if (via != "assault" && victim.IsHostileToActor(PlayerRef))
         return   ; fighting an enemy is not news
+    endIf
+    Spell castSpell = hitSource as Spell
+    if (castSpell && !castSpell.IsHostile())
+        return   ; an animation, expression or test spell cast on someone is not an attack
     endIf
     float now = Utility.GetCurrentRealTime()
     if (victim == _lwLastHit && now - _lwLastHitAt < LwHitCooldownSeconds)

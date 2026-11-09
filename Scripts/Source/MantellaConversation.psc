@@ -185,6 +185,7 @@ function ContinueConversation(string nextAction, int handle)
         if(SKSE_HTTP.hasKey(handle, "mantella_lw_body_on")) ; LIVINGWORLD PATCH: body language (BL1) on or off
             repository.LivingWorldSetBodyLanguage(SKSE_HTTP.getBool(handle, "mantella_lw_body_on", true))
         endif
+        repository.LivingWorldWatchWalkAway() ; LIVINGWORLD PATCH: walking away ends the conversation
         ;Debug.Notification("Conversation started.")
         RequestContinueConversation()
     elseIf(nextAction == mConsts.KEY_REPLYTYPE_NPCTALK)
