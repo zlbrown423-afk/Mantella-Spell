@@ -350,6 +350,9 @@ function ProcessNpcSpeak(int handle)
             h += 1
         endWhile
     endif
+    if(SKSE_HTTP.hasKey(handle, "mantella_lw_guard_bed_id")) ; LIVINGWORLD PATCH: guard careers, the barracks bunk
+        repository.LivingWorldGuardBed(SKSE_HTTP.getInt(handle, "mantella_lw_guard_bed_id"), SKSE_HTTP.getString(handle, "mantella_lw_guard_bed_plugin", "Skyrim.esm"), SKSE_HTTP.getBool(handle, "mantella_lw_guard_bed_own"))
+    endif
     if(SKSE_HTTP.hasKey(handle, "mantella_lw_guard_issue_ids")) ; LIVINGWORLD PATCH: guard careers, the uniform a guard leader hands over
         int[] lwIssueCounts ; LIVINGWORLD PATCH: G2 wages, how many of each (gold)
         if(SKSE_HTTP.hasKey(handle, "mantella_lw_guard_issue_counts"))
