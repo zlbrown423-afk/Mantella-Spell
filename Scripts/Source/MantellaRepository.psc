@@ -1047,9 +1047,8 @@ function LivingWorldRegisterAttireAndDrink()
     _lwProbeOn = false
     _lwTickDue = 0.0
     _lwRegularDueAt = Utility.GetCurrentRealTime() + LivingWorldHygienePollSeconds
-    if (LivingWorldHygieneOn)
-        LwScheduleTick(LivingWorldHygienePollSeconds)
-    endIf
+    LwBodyReset() ; LIVINGWORLD PATCH: body language (BL1)
+    LwScheduleNext(Utility.GetCurrentRealTime())
 endFunction
 
 ; "clothing", "armor" or "none" for what the actor wears in the body slot
@@ -1164,12 +1163,33 @@ Event OnUpdate()
         endIf
         _lwRegularDueAt = now + LivingWorldHygienePollSeconds
     endIf
-    if (_lwProbeOn)
+    if (_lwProbeOn)   ; the player is holding someone: no body language until they let go
         LwScheduleTick(LivingWorldProbeSeconds)
-    elseIf (LivingWorldHygieneOn)
-        LwScheduleTick(_lwRegularDueAt - now)
+        return
     endIf
+    if (LivingWorldBodyLanguageOn && now >= _lwbDueAt)
+        if (LwBodyTick(now))
+            _lwbDueAt = now + LwBodyTickSeconds
+        else
+            _lwbDueAt = now + LwBodyScanSeconds
+        endIf
+    endIf
+    LwScheduleNext(now)
 EndEvent
+
+; The next tick, for whichever comes first: the regular checks (when hygiene is on) or body language.
+function LwScheduleNext(float now)
+    float due = -1.0
+    if (LivingWorldHygieneOn)
+        due = _lwRegularDueAt
+    endIf
+    if (LivingWorldBodyLanguageOn && (due < 0.0 || _lwbDueAt < due))
+        due = _lwbDueAt
+    endIf
+    if (due >= 0.0)
+        LwScheduleTick(due - now)
+    endIf
+endFunction
 
 function LwScheduleTick(float delay)
     if (delay < 0.1)
@@ -1329,9 +1349,7 @@ function LwProbeHoldEnded(bool abIsLeft, Actor target, float now)
     LivingWorldQueue(LivingWorldHeader("perf") + "|what=grab|hand=" + hand + "|target=" + target.GetDisplayName() + "|rt0=" + since + "|rt1=" + now + "|grabs=" + grabs + "|drops=" + drops + "|dups=" + dups + "|short=" + shortHolds + "|ticks=" + ticks + "|lag_avg=" + lagAvg + "|lag_max=" + lagMax + "|stalls=" + stalls + "|grab_ms=" + grabMs + "|noarea=" + noArea)
     if (!_lwLeftHeld && !_lwRightHeld)
         _lwProbeOn = false
-        if (LivingWorldHygieneOn)
-            LwScheduleTick(_lwRegularDueAt - now)
-        endIf
+        LwScheduleNext(now)
     endIf
 endFunction
 
@@ -2573,4 +2591,478 @@ function LwRecordHit(Actor victim, Form hitSource, string via)  ; not 'weapon': 
     string rec = LivingWorldHeader("hit") + "|actor=" + LivingWorldActorField(PlayerRef) + "|target=" + LivingWorldActorField(victim) + "|item=" + weaponName + "|via=" + via + "|trank=" + victim.GetRelationshipRank(PlayerRef)
     rec += LivingWorldWitnesses(PlayerRef, victim)
     LivingWorldQueue(rec)
+endFunction
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; LIVINGWORLD PATCH: body language, step 1 (BL1): proximity and gaze                                 ;
+; Up to four nearby NPCs are watched every half second (otherwise one look around every two         ;
+; seconds). Each reacts on its own, from its expression profile: the server sends one per            ;
+; conversation participant (mantella_lw_body: Name|comfort m|gaze|guard|steps back); anyone else     ;
+; gets a default from their relationship rank with the player.                                       ;
+; - Inside their comfort distance for 1.5 s: "crowd" record, a step back (unless they hold their     ;
+;   ground), arms folded when guarded. They relax only once the player is 30% beyond it.             ;
+; - Gaze (outside Mantella conversations, which set their own look-at): hold the player's gaze,      ;
+;   glance now and then, or look away when the player faces them.                                    ;
+; - Records (type=presence, MantellaExtension livingworld/bodylang/presence.py): approach, crowd,    ;
+;   backed_off (only when the player moved away, never because the NPC stepped back), weapon, stare. ;
+; Loop guards: only the player's behaviour is ever recorded; NPCs never step toward anyone; every    ;
+; reaction has a cooldown; at most 4 reactions per NPC per minute and 12 records per minute in all.  ;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+bool property LivingWorldBodyLanguageOn = true auto hidden   ; the server's start reply switches it (MANTELLA_LW_BODY_LANGUAGE)
+float property LwBodyWatchMeters = 6.0 auto hidden
+float property LwBodyTickSeconds = 0.5 auto hidden
+float property LwBodyScanSeconds = 2.0 auto hidden
+
+Actor[] _lwbActors          ; the watched NPCs (4 slots)
+float[] _lwbComfort         ; their profile
+float[] _lwbGaze
+float[] _lwbGuard
+bool[] _lwbStep
+bool[] _lwbInside           ; crowding state
+float[] _lwbInsideSince
+bool[] _lwbReported
+float[] _lwbMinDist
+float[] _lwbEntryX          ; where the player stood when crowding began
+float[] _lwbEntryY
+int[] _lwbCrowdN
+float[] _lwbLastCrowdAt
+float[] _lwbLastStepAt
+float[] _lwbOffsetUntil     ; a step back holds until then
+float[] _lwbLastArmsAt
+float[] _lwbArmsUntil
+float[] _lwbLastFarAt
+float[] _lwbLastApproachAt
+bool[] _lwbLookHeld
+float[] _lwbGlanceUntil
+float[] _lwbNextGlanceAt
+float[] _lwbHeadAwayUntil
+float[] _lwbStareSince
+float[] _lwbLastStareAt
+float[] _lwbLastWeaponAt
+float[] _lwbReact1          ; times of the last four reactions (per-minute cap)
+float[] _lwbReact2
+float[] _lwbReact3
+float[] _lwbReact4
+Actor[] _lwbProfActors      ; profiles the server sent, by actor (ring of 16)
+float[] _lwbProfComfort
+float[] _lwbProfGaze
+float[] _lwbProfGuard
+bool[] _lwbProfStep
+int _lwbProfNext = 0
+float _lwbDueAt = 0.0
+float _lwbScanDueAt = 0.0
+bool _lwbWeaponWas = false
+float _lwbRecWindowAt = 0.0
+int _lwbRecCount = 0
+Idle _lwbArmsIdle
+
+; Called from LivingWorldRegisterPerception on every load: undoes anything a save kept half done.
+function LwBodyReset()
+    if (_lwbActors && _lwbActors.Length == 4)
+        int i = 0
+        while (i < 4)
+            LwBodyRelease(i)
+            i += 1
+        endWhile
+    endIf
+    _lwbActors = new Actor[4]
+    _lwbComfort = new float[4]
+    _lwbGaze = new float[4]
+    _lwbGuard = new float[4]
+    _lwbStep = new bool[4]
+    _lwbInside = new bool[4]
+    _lwbInsideSince = new float[4]
+    _lwbReported = new bool[4]
+    _lwbMinDist = new float[4]
+    _lwbEntryX = new float[4]
+    _lwbEntryY = new float[4]
+    _lwbCrowdN = new int[4]
+    _lwbLastCrowdAt = new float[4]
+    _lwbLastStepAt = new float[4]
+    _lwbOffsetUntil = new float[4]
+    _lwbLastArmsAt = new float[4]
+    _lwbArmsUntil = new float[4]
+    _lwbLastFarAt = new float[4]
+    _lwbLastApproachAt = new float[4]
+    _lwbLookHeld = new bool[4]
+    _lwbGlanceUntil = new float[4]
+    _lwbNextGlanceAt = new float[4]
+    _lwbHeadAwayUntil = new float[4]
+    _lwbStareSince = new float[4]
+    _lwbLastStareAt = new float[4]
+    _lwbLastWeaponAt = new float[4]
+    _lwbReact1 = new float[4]
+    _lwbReact2 = new float[4]
+    _lwbReact3 = new float[4]
+    _lwbReact4 = new float[4]
+    if (!_lwbProfActors || _lwbProfActors.Length != 16)
+        _lwbProfActors = new Actor[16]
+        _lwbProfComfort = new float[16]
+        _lwbProfGaze = new float[16]
+        _lwbProfGuard = new float[16]
+        _lwbProfStep = new bool[16]
+        _lwbProfNext = 0
+    endIf
+    _lwbArmsIdle = Game.GetFormFromFile(0x000FF7F4, "Skyrim.esm") as Idle   ; IdleOffsetArmsCrossedStart
+    _lwbWeaponWas = PlayerRef.IsWeaponDrawn()
+    _lwbDueAt = 0.0
+    _lwbScanDueAt = 0.0
+endFunction
+
+; Undo whatever this slot's NPC is doing for us: look-at, head turned away, step back, folded arms.
+function LwBodyRelease(int i)
+    Actor a = _lwbActors[i]
+    if (a)
+        if (_lwbLookHeld[i] || _lwbGlanceUntil[i] > 0.0)
+            a.ClearLookAt()
+        endIf
+        if (_lwbHeadAwayUntil[i] > 0.0)
+            a.SetHeadTracking(true)
+        endIf
+        if (_lwbOffsetUntil[i] > 0.0)
+            a.ClearKeepOffsetFromActor()
+        endIf
+        if (_lwbArmsUntil[i] > 0.0)
+            Debug.SendAnimationEvent(a, "OffsetStop")
+        endIf
+    endIf
+    _lwbActors[i] = None
+    _lwbInside[i] = false
+    _lwbReported[i] = false
+    _lwbLookHeld[i] = false
+    _lwbGlanceUntil[i] = 0.0
+    _lwbHeadAwayUntil[i] = 0.0
+    _lwbOffsetUntil[i] = 0.0
+    _lwbArmsUntil[i] = 0.0
+    _lwbStareSince[i] = 0.0
+endFunction
+
+; The server's start reply says whether body language is on (mantella_lw_body_on). Off lets everyone go.
+function LivingWorldSetBodyLanguage(bool on)
+    if (on == LivingWorldBodyLanguageOn)
+        return
+    endIf
+    LivingWorldBodyLanguageOn = on
+    if (!on && _lwbActors)
+        int i = 0
+        while (i < 4)
+            LwBodyRelease(i)
+            i += 1
+        endWhile
+    elseIf (on && !_lwProbeOn)
+        _lwbDueAt = 0.0
+        LwScheduleNext(Utility.GetCurrentRealTime())
+    endIf
+endFunction
+
+; The server's profiles (mantella_lw_body on an NPC line): "Name|comfort|gaze|guard|step".
+function LivingWorldBodyProfiles(string[] profiles, MantellaConversation conv)
+    if (!profiles || !_lwbProfActors)
+        return
+    endIf
+    int p = 0
+    while (p < profiles.Length)
+        string[] parts = StringUtil.Split(profiles[p], "|")
+        if (parts.Length >= 5)
+            Actor a = conv.GetActorByName(parts[0])
+            if (a)
+                int at = _lwbProfActors.Find(a)
+                if (at < 0)
+                    at = _lwbProfNext
+                    _lwbProfNext = (_lwbProfNext + 1) % 16
+                    _lwbProfActors[at] = a
+                endIf
+                _lwbProfComfort[at] = parts[1] as float
+                _lwbProfGaze[at] = parts[2] as float
+                _lwbProfGuard[at] = parts[3] as float
+                _lwbProfStep[at] = parts[4] == "1"
+                int slot = _lwbActors.Find(a)
+                if (slot >= 0)
+                    LwBodyLoadProfile(slot, a)
+                endIf
+            endIf
+        endIf
+        p += 1
+    endWhile
+endFunction
+
+function LwBodyLoadProfile(int i, Actor a)
+    int at = _lwbProfActors.Find(a)
+    if (at >= 0)
+        _lwbComfort[i] = _lwbProfComfort[at]
+        _lwbGaze[i] = _lwbProfGaze[at]
+        _lwbGuard[i] = _lwbProfGuard[at]
+        _lwbStep[i] = _lwbProfStep[at]
+        return
+    endIf
+    int rank = a.GetRelationshipRank(PlayerRef)   ; no profile yet: a default from how they know the player
+    _lwbComfort[i] = 1.0
+    _lwbGaze[i] = 0.5
+    _lwbGuard[i] = 0.3
+    _lwbStep[i] = true
+    if (rank >= 2)
+        _lwbComfort[i] = 0.7
+        _lwbGaze[i] = 0.7
+        _lwbGuard[i] = 0.15
+    elseIf (rank == 1)
+        _lwbComfort[i] = 0.85
+        _lwbGaze[i] = 0.6
+    elseIf (rank < 0)
+        _lwbComfort[i] = 1.4
+        _lwbGaze[i] = 0.3
+        _lwbGuard[i] = 0.65
+    endIf
+endFunction
+
+bool function LwBodyBusy(Actor a)
+    return a.IsInCombat() || a.GetSitState() != 0 || a.IsOnMount() || a.IsPlayerTeammate() || a.IsUnconscious() || a.IsBleedingOut()
+endFunction
+
+bool function LwBodyCanReact(int i, float now)
+    if (now - _lwbReact4[i] < 60.0)   ; the oldest of the last four is less than a minute old
+        return false
+    endIf
+    return true
+endFunction
+
+function LwBodyReacted(int i, float now)
+    _lwbReact4[i] = _lwbReact3[i]
+    _lwbReact3[i] = _lwbReact2[i]
+    _lwbReact2[i] = _lwbReact1[i]
+    _lwbReact1[i] = now
+endFunction
+
+function LwBodyRecord(Actor a, string what, string extra)
+    float now = Utility.GetCurrentRealTime()
+    if (now - _lwbRecWindowAt > 60.0)
+        _lwbRecWindowAt = now
+        _lwbRecCount = 0
+    endIf
+    if (_lwbRecCount >= 12)
+        return
+    endIf
+    _lwbRecCount += 1
+    LivingWorldQueue(LivingWorldHeader("presence") + "|actor=" + LivingWorldActorField(PlayerRef) + "|target=" + LivingWorldActorField(a) + "|what=" + what + extra)
+endFunction
+
+; Fill free slots with conversation participants and the closest person, drop anyone gone or far.
+function LwBodyScan()
+    float now = Utility.GetCurrentRealTime()
+    int i = 0
+    while (i < 4)
+        Actor a = _lwbActors[i]
+        if (a && (!a.Is3DLoaded() || !LivingWorldIsPerson(a) || a.GetDistance(PlayerRef) / 71.0210 > LwBodyWatchMeters + 2.0))
+            LwBodyRelease(i)
+        endIf
+        i += 1
+    endWhile
+    MantellaConversation conv = ListenerScript.conversation
+    if (conv && conv.IsRunning())
+        FormList participants = conv.Participants
+        int p = 0
+        while (p < participants.GetSize())
+            LwBodyAdd(participants.GetAt(p) as Actor, now)
+            p += 1
+        endWhile
+    endIf
+    LwBodyAdd(Game.FindClosestActorFromRef(PlayerRef, LwBodyWatchMeters * 71.0210), now)
+endFunction
+
+function LwBodyAdd(Actor a, float now)
+    if (!a || a == PlayerRef || _lwbActors.Find(a) >= 0 || !a.Is3DLoaded() || !LivingWorldIsPerson(a))
+        return
+    endIf
+    if (a.GetDistance(PlayerRef) / 71.0210 > LwBodyWatchMeters)
+        return
+    endIf
+    int i = _lwbActors.Find(None)
+    if (i < 0)
+        return
+    endIf
+    _lwbActors[i] = a
+    LwBodyLoadProfile(i, a)
+    _lwbInside[i] = false
+    _lwbReported[i] = false
+    _lwbLastFarAt[i] = 0.0   ; other cooldowns stay with the slot, so leaving and coming back resets nothing
+    _lwbStareSince[i] = 0.0
+endFunction
+
+; One body language step. Returns true while anyone is watched (the next step comes sooner).
+bool function LwBodyTick(float now)
+    if (!LivingWorldBodyLanguageOn || !_lwbActors || Utility.IsInMenuMode())
+        return false
+    endIf
+    if (now >= _lwbScanDueAt)
+        LwBodyScan()
+        _lwbScanDueAt = now + LwBodyScanSeconds
+    endIf
+    bool weaponOut = PlayerRef.IsWeaponDrawn()
+    bool weaponDrawnNow = weaponOut && !_lwbWeaponWas
+    _lwbWeaponWas = weaponOut
+    MantellaConversation conv = ListenerScript.conversation
+    bool talking = conv && conv.IsRunning()
+    bool any = false
+    int i = 0
+    while (i < 4)
+        Actor a = _lwbActors[i]
+        if (a)
+            any = true
+            LwBodyStep(i, a, now, weaponDrawnNow, talking && conv.Participants.HasForm(a))
+        endIf
+        i += 1
+    endWhile
+    return any
+endFunction
+
+function LwBodyStep(int i, Actor a, float now, bool weaponDrawnNow, bool inTalk)
+    float d = a.GetDistance(PlayerRef) / 71.0210
+    float comfort = _lwbComfort[i]
+    bool busy = LwBodyBusy(a)
+    ; timers running out
+    if (_lwbOffsetUntil[i] > 0.0 && now >= _lwbOffsetUntil[i])
+        a.ClearKeepOffsetFromActor()
+        _lwbOffsetUntil[i] = 0.0
+    endIf
+    if (_lwbArmsUntil[i] > 0.0 && now >= _lwbArmsUntil[i])
+        Debug.SendAnimationEvent(a, "OffsetStop")
+        _lwbArmsUntil[i] = 0.0
+    endIf
+    if (a.IsInCombat())
+        LwBodyRelease(i)   ; combat AI is in charge
+        return
+    endIf
+
+    ; approach: from beyond 5 m to within 3 m in a few seconds
+    if (d > 5.0)
+        _lwbLastFarAt[i] = now
+    elseIf (d < 3.0 && _lwbLastFarAt[i] > 0.0 && now - _lwbLastFarAt[i] < 4.0 && now - _lwbLastApproachAt[i] > 60.0)
+        _lwbLastApproachAt[i] = now
+        _lwbLastFarAt[i] = 0.0
+        LwBodyRecord(a, "approach", "|dist=" + d)
+    endIf
+
+    ; crowding, with hysteresis
+    if (!_lwbInside[i] && d < comfort)
+        _lwbInside[i] = true
+        _lwbInsideSince[i] = now
+        _lwbReported[i] = false
+        _lwbMinDist[i] = d
+        _lwbEntryX[i] = PlayerRef.GetPositionX()
+        _lwbEntryY[i] = PlayerRef.GetPositionY()
+    elseIf (_lwbInside[i])
+        if (d < _lwbMinDist[i])
+            _lwbMinDist[i] = d
+        endIf
+        if (d > comfort * 1.3)
+            _lwbInside[i] = false
+            if (_lwbReported[i])
+                float dx = PlayerRef.GetPositionX() - _lwbEntryX[i]
+                float dy = PlayerRef.GetPositionY() - _lwbEntryY[i]
+                if (Math.sqrt(dx * dx + dy * dy) / 71.0210 >= 0.3)   ; the player moved away, not just the NPC
+                    LwBodyRecord(a, "backed_off", "|dist=" + d)
+                endIf
+            endIf
+            _lwbReported[i] = false
+        else
+            if (!_lwbReported[i] && now - _lwbInsideSince[i] >= 1.5)
+                if (now - _lwbLastCrowdAt[i] < 180.0)
+                    _lwbCrowdN[i] = _lwbCrowdN[i] + 1
+                else
+                    _lwbCrowdN[i] = 1
+                endIf
+                _lwbLastCrowdAt[i] = now
+                _lwbReported[i] = true
+                LwBodyRecord(a, "crowd", "|dist=" + _lwbMinDist[i] + "|dur=" + (now - _lwbInsideSince[i]) + "|n=" + _lwbCrowdN[i])
+            endIf
+            if (_lwbReported[i] && !busy)
+                if (_lwbStep[i] && now - _lwbLastStepAt[i] >= 10.0 && LwBodyCanReact(i, now))
+                    ; step back along the line from the player, never toward: offset in the player's frame
+                    float ang = PlayerRef.GetHeadingAngle(a)
+                    float r = comfort * 1.35 * 71.0210
+                    a.KeepOffsetFromActor(PlayerRef, r * Math.sin(ang), r * Math.cos(ang), 0.0, 0.0, 0.0, ang + 180.0, 40.0, 20.0)
+                    _lwbOffsetUntil[i] = now + 2.5
+                    _lwbLastStepAt[i] = now
+                    LwBodyReacted(i, now)
+                endIf
+                if (_lwbGuard[i] >= 0.6 && _lwbArmsUntil[i] == 0.0 && now - _lwbLastArmsAt[i] >= 20.0 && _lwbArmsIdle && LwBodyCanReact(i, now))
+                    if (a.PlayIdle(_lwbArmsIdle))
+                        _lwbArmsUntil[i] = now + 6.0
+                        _lwbLastArmsAt[i] = now
+                        LwBodyReacted(i, now)
+                    endIf
+                endIf
+            endIf
+        endIf
+    endIf
+
+    ; facing: the player's body heading (the headset's direction is not readable from Papyrus)
+    bool facing = Math.abs(PlayerRef.GetHeadingAngle(a)) < 15.0
+    if (d < 2.0 && facing)
+        if (_lwbStareSince[i] == 0.0)
+            _lwbStareSince[i] = now
+        elseIf (now - _lwbStareSince[i] >= 5.0 && now - _lwbLastStareAt[i] >= 90.0)
+            _lwbLastStareAt[i] = now
+            LwBodyRecord(a, "stare", "|dist=" + d + "|dur=" + (now - _lwbStareSince[i]))
+        endIf
+    else
+        _lwbStareSince[i] = 0.0
+    endIf
+
+    if (weaponDrawnNow && d < 6.0 && now - _lwbLastWeaponAt[i] >= 30.0)
+        _lwbLastWeaponAt[i] = now
+        LwBodyRecord(a, "weapon", "|dist=" + d)
+    endIf
+
+    ; gaze: Mantella sets look-at between speakers in its conversations, so only outside them
+    if (inTalk || busy)
+        if (_lwbLookHeld[i] || _lwbGlanceUntil[i] > 0.0)
+            a.ClearLookAt()
+            _lwbLookHeld[i] = false
+            _lwbGlanceUntil[i] = 0.0
+        endIf
+        if (_lwbHeadAwayUntil[i] > 0.0)
+            a.SetHeadTracking(true)
+            _lwbHeadAwayUntil[i] = 0.0
+        endIf
+        return
+    endIf
+    if (_lwbHeadAwayUntil[i] > 0.0 && now >= _lwbHeadAwayUntil[i])
+        a.SetHeadTracking(true)
+        _lwbHeadAwayUntil[i] = 0.0
+    endIf
+    if (_lwbGlanceUntil[i] > 0.0 && now >= _lwbGlanceUntil[i])
+        a.ClearLookAt()
+        _lwbGlanceUntil[i] = 0.0
+    endIf
+    if (d >= 4.0)
+        if (_lwbLookHeld[i])
+            a.ClearLookAt()
+            _lwbLookHeld[i] = false
+        endIf
+        return
+    endIf
+    float gaze = _lwbGaze[i]
+    if (gaze >= 0.6)
+        if (!_lwbLookHeld[i])
+            a.SetLookAt(PlayerRef)
+            _lwbLookHeld[i] = true
+        endIf
+    else
+        if (_lwbLookHeld[i])
+            a.ClearLookAt()
+            _lwbLookHeld[i] = false
+        endIf
+        if (gaze >= 0.35)
+            if (_lwbGlanceUntil[i] == 0.0 && now >= _lwbNextGlanceAt[i])
+                a.SetLookAt(PlayerRef)
+                _lwbGlanceUntil[i] = now + 2.0
+                _lwbNextGlanceAt[i] = now + 8.0
+            endIf
+        elseIf (facing && d < 3.0 && _lwbHeadAwayUntil[i] == 0.0 && now >= _lwbNextGlanceAt[i])
+            a.SetHeadTracking(false)   ; looks away from the player's gaze for a moment
+            _lwbHeadAwayUntil[i] = now + 3.0
+            _lwbNextGlanceAt[i] = now + 9.0
+        endIf
+    endIf
 endFunction
