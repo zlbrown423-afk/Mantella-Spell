@@ -968,6 +968,47 @@ int property LivingWorldBedId = 0 auto hidden
 string property LivingWorldBedPlugin = "" auto hidden
 int property LivingWorldBedOwn = -1 auto hidden   ; pending: 1 = give, 0 = take back, -1 = nothing pending
 
+;; LIVINGWORLD PATCH: guard careers, a footlocker by the bunk. The server names a container base that never
+;; respawns; the first time the player stands by their own bunk (within about 2.5 m) one is placed at their
+;; feet and made theirs. It is a placed, persistent reference, so it and what is put in it stay in the save.
+int property LivingWorldChestBase = 0 auto hidden
+string property LivingWorldChestPlugin = "" auto hidden
+ObjectReference property LivingWorldChestRef auto hidden
+
+function LivingWorldGuardChest(int baseId, string plugin)
+    if (LivingWorldChestRef)
+        return   ; already placed
+    endIf
+    LivingWorldChestBase = baseId
+    LivingWorldChestPlugin = plugin
+    LivingWorldGuardChestRetry()
+endFunction
+
+function LivingWorldGuardChestRetry()
+    if (LivingWorldChestBase == 0 || LivingWorldChestRef || LivingWorldBedId == 0)
+        return
+    endIf
+    ObjectReference bed = Game.GetFormFromFile(LivingWorldBedId, LivingWorldBedPlugin) as ObjectReference
+    if (!bed || !bed.Is3DLoaded() || bed.GetActorOwner() != PlayerRef.GetActorBase())
+        return   ; not there yet, or the bunk is not the player's
+    endIf
+    if (PlayerRef.GetDistance(bed) > 180.0)
+        return
+    endIf
+    Form base = Game.GetFormFromFile(LivingWorldChestBase, LivingWorldChestPlugin)
+    if (!base)
+        LivingWorldChestBase = 0
+        return
+    endIf
+    ObjectReference chest = PlayerRef.PlaceAtMe(base, 1, true, false)
+    if (chest)
+        chest.SetActorOwner(PlayerRef.GetActorBase())
+        LivingWorldChestRef = chest
+        LivingWorldChestBase = 0
+        Debug.Notification("A footlocker by your bunk is yours to use.")
+    endIf
+endFunction
+
 function LivingWorldGuardBed(int id, string plugin, bool own)
     LivingWorldBedId = id
     LivingWorldBedPlugin = plugin
@@ -980,6 +1021,7 @@ function LivingWorldGuardBed(int id, string plugin, bool own)
 endFunction
 
 function LivingWorldGuardBedRetry()
+    LivingWorldGuardChestRetry()
     if (LivingWorldBedOwn < 0 || LivingWorldBedId == 0)
         return
     endIf
@@ -994,6 +1036,137 @@ function LivingWorldGuardBedRetry()
         bed.SetActorOwner(None)
     endIf
     LivingWorldBedOwn = -1
+endFunction
+
+;; LIVINGWORLD PATCH: guard careers G2e, shift encounters. The server sends the watch windows of the duty in
+;; hand (when each falls due, and whether someone should come over or the player should notice something).
+;; MantellaListenerScript checks them on its update tick: when one is due on the shift and no conversation is
+;; running, a nearby adult who is awake, not hostile, not a follower and has not come over lately walks up and
+;; a conversation starts; if nobody fits, the player notices something (a notification). Either way a "watch"
+;; record tells the server. Nothing is spawned and nothing is decided here.
+int property LivingWorldWatchTask = 0 auto hidden
+float property LivingWorldWatchEnd = 0.0 auto hidden
+float property LivingWorldWatchCooldown = 3.0 auto hidden
+float[] property LivingWorldWatchAt auto hidden
+int[] property LivingWorldWatchWin auto hidden
+int[] property LivingWorldWatchKind auto hidden
+string[] property LivingWorldWatchObs auto hidden
+bool[] property LivingWorldWatchDone auto hidden
+Actor[] property LivingWorldWatchRecent auto hidden
+float[] property LivingWorldWatchRecentAt auto hidden
+
+function LivingWorldGuardWatch(int task, float endGt, float[] at, int[] win, int[] kind, string[] obs, float cooldown)
+    LivingWorldWatchTask = task
+    LivingWorldWatchEnd = endGt
+    LivingWorldWatchAt = at
+    LivingWorldWatchWin = win
+    LivingWorldWatchKind = kind
+    LivingWorldWatchObs = obs
+    if (cooldown > 0.0)
+        LivingWorldWatchCooldown = cooldown
+    endIf
+    int n = 1
+    if (at && at.Length > 0)
+        n = at.Length
+    endIf
+    LivingWorldWatchDone = Utility.CreateBoolArray(n)
+endFunction
+
+; The first watch window that is due now on the shift, or -1.
+int function LivingWorldWatchDue()
+    if (LivingWorldWatchTask == 0 || !LivingWorldWatchAt || !LivingWorldWatchDone)
+        return -1
+    endIf
+    float now = Utility.GetCurrentGameTime() + 1.0
+    if (now > LivingWorldWatchEnd)
+        return -1
+    endIf
+    int i = 0
+    while (i < LivingWorldWatchAt.Length && i < LivingWorldWatchDone.Length)
+        if (!LivingWorldWatchDone[i] && LivingWorldWatchAt[i] <= now)
+            return i
+        endIf
+        i += 1
+    endWhile
+    return -1
+endFunction
+
+bool function LivingWorldWatchWantsSomeone(int slot)
+    return LivingWorldWatchKind && slot < LivingWorldWatchKind.Length && LivingWorldWatchKind[slot] == 1
+endFunction
+
+bool function LivingWorldWatchCameLately(Actor a)
+    if (!LivingWorldWatchRecent)
+        return false
+    endIf
+    float now = Utility.GetCurrentGameTime() + 1.0
+    int i = 0
+    while (i < LivingWorldWatchRecent.Length)
+        if (LivingWorldWatchRecent[i] == a && now - LivingWorldWatchRecentAt[i] < LivingWorldWatchCooldown)
+            return true
+        endIf
+        i += 1
+    endWhile
+    return false
+endFunction
+
+bool function LivingWorldWatchFits(Actor a)
+    if (!LivingWorldIsPerson(a) || a == PlayerRef || a.IsDisabled() || a.IsInCombat() || a.IsPlayerTeammate())
+        return false
+    endIf
+    if (a.GetSleepState() >= 3 || a.IsHostileToActor(PlayerRef) || a.IsInDialogueWithPlayer())
+        return false
+    endIf
+    return !LivingWorldWatchCameLately(a)
+endFunction
+
+; Someone from the nearby people who may come over, picked at random among those who fit, or None.
+Actor function LivingWorldWatchPick(Actor[] nearby)
+    if (!nearby || nearby.Length == 0)
+        return None
+    endIf
+    int n = nearby.Length
+    int start = Utility.RandomInt(0, n - 1)
+    int j = 0
+    while (j < n)
+        Actor a = nearby[(start + j) % n]
+        if (a && LivingWorldWatchFits(a))
+            return a
+        endIf
+        j += 1
+    endWhile
+    return None
+endFunction
+
+function LivingWorldWatchRemember(Actor a)
+    if (!LivingWorldWatchRecent)
+        LivingWorldWatchRecent = new Actor[8]
+        LivingWorldWatchRecentAt = new float[8]
+    endIf
+    int i = LivingWorldWatchRecent.Length - 1
+    while (i > 0)
+        LivingWorldWatchRecent[i] = LivingWorldWatchRecent[i - 1]
+        LivingWorldWatchRecentAt[i] = LivingWorldWatchRecentAt[i - 1]
+        i -= 1
+    endWhile
+    LivingWorldWatchRecent[0] = a
+    LivingWorldWatchRecentAt[0] = Utility.GetCurrentGameTime() + 1.0
+endFunction
+
+; Use up a window and tell the server what it brought: who came over, or what the player noticed.
+function LivingWorldWatchRecord(int slot, Actor who)
+    LivingWorldWatchDone[slot] = true
+    string rec = LivingWorldHeader("watch") + "|actor=" + LivingWorldActorField(PlayerRef)
+    if (who)
+        LivingWorldWatchRemember(who)
+        rec += "|target=" + LivingWorldActorField(who) + "|via=approach"
+    else
+        rec += "|via=observe"
+        if (LivingWorldWatchObs && slot < LivingWorldWatchObs.Length)
+            Debug.Notification("On watch: " + LivingWorldWatchObs[slot])
+        endIf
+    endIf
+    LivingWorldQueue(rec + "|win=" + LivingWorldWatchWin[slot] + "|task=" + LivingWorldWatchTask)
 endFunction
 
 function LivingWorldGuardIssue(int[] ids, string[] plugins, int[] counts = None)
