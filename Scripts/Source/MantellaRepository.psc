@@ -383,6 +383,13 @@ float _lwReactedAnyAt = -1000.0
 bool _lwLeftReacted
 bool _lwRightReacted
 
+; Walking away ends the conversation: Mantella only ends one when the player says goodbye or uses the
+; end spell, so walking off left it running, and the next NPC the player spoke to was added to it.
+bool property LivingWorldWalkAwayOn = true auto hidden
+float property LivingWorldWalkAwayMeters = 12.0 auto hidden   ; further than this from every NPC in it
+float property LivingWorldWalkAwaySeconds = 4.0 auto hidden   ; for this long
+int _lwWalkWatch = 0
+
 ; Called on every game load (HIGGS registrations are not kept in the save).
 function LivingWorldRegisterPerception()
     _lwLeftHeld = None
@@ -391,6 +398,8 @@ function LivingWorldRegisterPerception()
     _lwPendingTarget = None
     RegisterForModEvent("LivingWorld_ReactNow", "OnLivingWorldReactNow")       ; reactions on the spot, each
     RegisterForModEvent("LivingWorld_HoldCheck", "OnLivingWorldHoldCheck")     ; on its own stack, off HIGGS's
+    RegisterForModEvent("LivingWorld_WalkAway", "OnLivingWorldWalkAway")       ; end a conversation the player left
+    LivingWorldWatchWalkAway() ; a conversation running across a save load is watched again
     if (SKSE.GetPluginVersion("HIGGS") > 0)
         HiggsVR.RegisterForGrabEvent(self)
         HiggsVR.RegisterForDropEvent(self)
@@ -607,6 +616,69 @@ Event OnLivingWorldReactNow(string eventName, string strArg, float numArg, Form 
 EndEvent
 
 ; a hand still holding someone long enough: they speak up while held
+; Called when a conversation starts. Each call starts a fresh watch; an older one sees the newer token and stops.
+function LivingWorldWatchWalkAway()
+    if (LivingWorldWalkAwayOn)
+        _lwWalkWatch += 1
+        SendModEvent("LivingWorld_WalkAway", "", _lwWalkWatch as float)
+    endIf
+endFunction
+
+Event OnLivingWorldWalkAway(string eventName, string strArg, float numArg, Form sender)
+    int token = numArg as int
+    MantellaConversation conv = ListenerScript.conversation
+    float away = 0.0
+    while (token == _lwWalkWatch && conv.IsRunning())
+        Utility.Wait(1.0)
+        if (conv.IsPlayerInConversation() && LivingWorldPlayerLeft(conv))
+            away += 1.0
+            if (away >= LivingWorldWalkAwaySeconds && token == _lwWalkWatch && conv.IsRunning())
+                _lwWalkWatch += 1 ; this watch is done
+                Debug.Notification("You walked away. Conversation ending...")
+                conv.EndConversation()
+                return
+            endIf
+        else
+            away = 0.0
+        endIf
+    endWhile
+EndEvent
+
+; True when every NPC in the conversation is out of earshot: far away, in another cell, or gone.
+bool function LivingWorldPlayerLeft(MantellaConversation conv)
+    int n = conv.Participants.GetSize()
+    int i = 0
+    bool anyNpc = false
+    while (i < n)
+        Actor a = conv.Participants.GetAt(i) as Actor
+        if (a && a != PlayerRef)
+            anyNpc = true
+            if (!a.IsDead() && a.GetParentCell() && a.GetParentCell().IsAttached() && a.GetDistance(PlayerRef) / 71.0210 <= LivingWorldWalkAwayMeters)
+                return false
+            endIf
+        endIf
+        i += 1
+    endWhile
+    return anyNpc
+endFunction
+
+; True when the target is far from every NPC already in the conversation (the player has moved on).
+bool function LivingWorldFarFromConversation(MantellaConversation conv, Actor target)
+    if (!LivingWorldWalkAwayOn || !target || !conv.IsPlayerInConversation())
+        return false
+    endIf
+    int n = conv.Participants.GetSize()
+    int i = 0
+    while (i < n)
+        Actor a = conv.Participants.GetAt(i) as Actor
+        if (a && a != PlayerRef && a != target && a.GetParentCell() && a.GetParentCell().IsAttached() && a.GetDistance(target) / 71.0210 <= LivingWorldWalkAwayMeters)
+            return false
+        endIf
+        i += 1
+    endWhile
+    return true
+endFunction
+
 Event OnLivingWorldHoldCheck(string eventName, string strArg, float numArg, Form sender)
     Utility.Wait(LivingWorldReactHoldSeconds + 0.2)
     float now = Utility.GetCurrentRealTime()
