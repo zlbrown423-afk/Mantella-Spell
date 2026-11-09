@@ -399,6 +399,7 @@ function LivingWorldRegisterPerception()
     RegisterForModEvent("LivingWorld_ReactNow", "OnLivingWorldReactNow")       ; reactions on the spot, each
     RegisterForModEvent("LivingWorld_HoldCheck", "OnLivingWorldHoldCheck")     ; on its own stack, off HIGGS's
     RegisterForModEvent("LivingWorld_WalkAway", "OnLivingWorldWalkAway")       ; end a conversation the player left
+    RegisterForModEvent("MantellaLivingWorld_StayOne", "OnLwStayOne")           ; walk a talker back (bards, schedules)
     LivingWorldWatchWalkAway() ; a conversation running across a save load is watched again
     if (SKSE.GetPluginVersion("HIGGS") > 0)
         HiggsVR.RegisterForGrabEvent(self)
@@ -618,7 +619,8 @@ EndEvent
 ; a hand still holding someone long enough: they speak up while held
 ; Called when a conversation starts. Each call starts a fresh watch; an older one sees the newer token and stops.
 function LivingWorldWatchWalkAway()
-    if (LivingWorldWalkAwayOn)
+    LwStayReset()
+    if (LivingWorldWalkAwayOn || LivingWorldStayOn)
         _lwWalkWatch += 1
         SendModEvent("LivingWorld_WalkAway", "", _lwWalkWatch as float)
     endIf
@@ -630,11 +632,18 @@ Event OnLivingWorldWalkAway(string eventName, string strArg, float numArg, Form 
     float away = 0.0
     while (token == _lwWalkWatch && conv.IsRunning())
         Utility.Wait(1.0)
-        if (conv.IsPlayerInConversation() && LivingWorldPlayerLeft(conv))
+        if (LivingWorldStayOn && conv.IsPlayerInConversation())
+            LwKeepTalkersClose(conv)
+        endIf
+        if (LivingWorldWalkAwayOn && conv.IsPlayerInConversation() && LivingWorldPlayerLeft(conv))
             away += 1.0
             if (away >= LivingWorldWalkAwaySeconds && token == _lwWalkWatch && conv.IsRunning())
                 _lwWalkWatch += 1 ; this watch is done
-                Debug.Notification("You walked away. Conversation ending...")
+                if (_lwStayGaveUp)
+                    Debug.Notification(_lwStayGaveUp.GetDisplayName() + " wandered off. Conversation ending...")
+                else
+                    Debug.Notification("You walked away. Conversation ending...")
+                endIf
                 conv.EndConversation()
                 return
             endIf
@@ -678,6 +687,137 @@ bool function LivingWorldFarFromConversation(MantellaConversation conv, Actor ta
     endWhile
     return true
 endFunction
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; LIVINGWORLD PATCH: keep talkers in the conversation                                                ;
+; Vanilla AI can pull an NPC out of a conversation mid-sentence: the bard's audience (the bard starts ;
+; a song and the inn's patrons go and listen) outranks Mantella's "stop to talk" package, and so can  ;
+; schedules. Each second of a conversation (on the walk-away watch) every NPC in it is checked: when  ;
+; they have walked off from where they stood and are now further from the player, for 2 s they are   ;
+; let go from the bard's audience; after 4 s they walk back to the player, at most                    ;
+; LivingWorldStayReturns times per conversation. The player walking away is not this (the NPC stays  ;
+; put), and NPCs under a Living World order (sit, go there, fetch drinks), on a Mantella action      ;
+; (follow, move to, travel...), following the player or fighting are left alone.                     ;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+bool property LivingWorldStayOn = true auto hidden
+float property LivingWorldStayDriftMeters = 3.0 auto hidden   ; moved this far from where they stood
+int property LivingWorldStayReturns = 3 auto hidden
+Actor[] _lwStayActors
+float[] _lwStayBase       ; their distance to the player when they last stood still
+float[] _lwStayX
+float[] _lwStayY
+int[] _lwStayFar          ; seconds in a row spent drifting off
+int[] _lwStayBack         ; walk-backs this conversation
+Actor _lwStayGaveUp       ; out of walk-backs: if the conversation ends now, they left, not the player
+
+function LwStayReset()
+    _lwStayActors = new Actor[8]
+    _lwStayBase = new float[8]
+    _lwStayX = new float[8]
+    _lwStayY = new float[8]
+    _lwStayFar = new int[8]
+    _lwStayBack = new int[8]
+    _lwStayGaveUp = None
+endFunction
+
+function LwKeepTalkersClose(MantellaConversation conv)
+    if (!_lwStayActors)
+        LwStayReset()
+    endIf
+    Faction onAction = Game.GetFormFromFile(0x223451, "Mantella.esp") as Faction   ; MantellaFunctionSourceFaction
+    int n = conv.Participants.GetSize()
+    int i = 0
+    while (i < n)
+        Actor a = conv.Participants.GetAt(i) as Actor
+        if (a && a != PlayerRef && LwStayCandidate(a, onAction))
+            float d = a.GetDistance(PlayerRef) / 71.0210
+            int slot = _lwStayActors.Find(a)
+            if (slot < 0)
+                slot = _lwStayActors.Find(None)
+                if (slot >= 0)
+                    _lwStayActors[slot] = a
+                    LwStayAnchor(slot, a, d)
+                    _lwStayBack[slot] = 0
+                endIf
+            else
+                float dx = a.GetPositionX() - _lwStayX[slot]
+                float dy = a.GetPositionY() - _lwStayY[slot]
+                float moved = Math.sqrt(dx * dx + dy * dy) / 71.0210
+                if (moved > LivingWorldStayDriftMeters && d > _lwStayBase[slot] + 1.0)
+                    _lwStayFar[slot] = _lwStayFar[slot] + 1
+                    if (_lwStayFar[slot] == 2)
+                        LwReleaseFromBardAudience(a)
+                        a.EvaluatePackage()
+                    elseIf (_lwStayFar[slot] >= 4)
+                        _lwStayFar[slot] = 0
+                        if (_lwStayBack[slot] < LivingWorldStayReturns)
+                            _lwStayBack[slot] = _lwStayBack[slot] + 1
+                            Debug.Trace("Mantella Living World: " + a.GetDisplayName() + " was pulled out of the conversation; walking back (" + _lwStayBack[slot] + ")")
+                            int handle = ModEvent.Create("MantellaLivingWorld_StayOne")
+                            if (handle)
+                                ModEvent.PushForm(handle, a)
+                                ModEvent.Send(handle)
+                            endIf
+                        else
+                            _lwStayGaveUp = a
+                        endIf
+                    endIf
+                elseIf (d <= _lwStayBase[slot] + 1.0)
+                    LwStayAnchor(slot, a, d)   ; standing with the player (or the player came over): the new spot
+                endIf
+            endIf
+        endIf
+        i += 1
+    endWhile
+endFunction
+
+function LwStayAnchor(int slot, Actor a, float d)
+    _lwStayBase[slot] = d
+    _lwStayX[slot] = a.GetPositionX()
+    _lwStayY[slot] = a.GetPositionY()
+    _lwStayFar[slot] = 0
+endFunction
+
+bool function LwStayCandidate(Actor a, Faction onAction)
+    if (a.IsDead() || a.IsInCombat() || a.IsPlayerTeammate() || !a.Is3DLoaded())
+        return false
+    endIf
+    if (_lwOrderActors && _lwOrderActors.Find(a) >= 0)
+        return false   ; sitting down, going there, fetching drinks: our own orders
+    endIf
+    if (onAction && a.IsInFaction(onAction))
+        return false   ; on a Mantella action (move to, travel, loot...)
+    endIf
+    return true
+endFunction
+
+; Vanilla's bard audience: the patrons a song pulls over. Letting go of their alias drops its package.
+function LwReleaseFromBardAudience(Actor a)
+    Quest audience = Quest.GetQuest("BardAudienceQuest")
+    if (!audience || !audience.IsRunning())
+        return
+    endIf
+    int n = audience.GetNumAliases()
+    int i = 0
+    while (i < n)
+        ReferenceAlias ra = audience.GetNthAlias(i) as ReferenceAlias
+        if (ra && ra.GetActorReference() == a)
+            ra.Clear()
+            Debug.Trace("Mantella Living World: let " + a.GetDisplayName() + " go from the bard's audience")
+        endIf
+        i += 1
+    endWhile
+endFunction
+
+Event OnLwStayOne(Form npcForm)
+    Actor a = npcForm as Actor
+    if (!a || !ListenerScript.conversation.IsRunning())
+        return
+    endIf
+    a.PathToReference(PlayerRef, 1.0)   ; latent, on its own event thread
+    a.EvaluatePackage()                  ; back under Mantella's "stop to talk"
+EndEvent
 
 Event OnLivingWorldHoldCheck(string eventName, string strArg, float numArg, Form sender)
     Utility.Wait(LivingWorldReactHoldSeconds + 0.2)
@@ -1626,6 +1766,7 @@ function LivingWorldRegisterAttireAndDrink()
     _lwPlayerCovered = PlayerRef.GetWornForm(LivingWorldBodySlotMask) != None
     RegisterForModEvent("MantellaConversation_Advanced_Action_mantella_npc_lw_drink", "OnLivingWorldDrinkAdvanced")
     RegisterForModEvent("MantellaConversation_Action_mantella_npc_lw_drink", "OnLivingWorldDrinkLegacy")
+    RegisterForModEvent("MantellaLivingWorld_DrinkFetch", "OnLwDrinkFetch")   ; no drink on them: a bottle nearby
     _lwInFight = false
     _lwSwimming = PlayerRef.IsSwimming()
     _lwProbeOn = false
@@ -2068,13 +2209,80 @@ function LivingWorldDrink(Actor drinker)
         i += 1
     endWhile
     if (!drink)
-        ListenerScript.AddIngameEventToConversation(drinker.GetDisplayName() + " reached for a drink but had none.")
+        ObjectReference bottle = LwNearbyBottle(drinker)
+        if (bottle)
+            int handle = ModEvent.Create("MantellaLivingWorld_DrinkFetch")   ; walking is latent: its own thread
+            if (handle)
+                ModEvent.PushForm(handle, drinker)
+                ModEvent.PushForm(handle, bottle)
+                ModEvent.Send(handle)
+                return
+            endIf
+        endIf
+        ListenerScript.AddIngameEventToConversation(drinker.GetDisplayName() + " reached for a drink but had none, and there was no bottle within reach. (The innkeeper sells them.)")
         return
     endIf
     drinker.EquipItem(drink, false, true)   ; an NPC equipping a potion drinks it
     LivingWorldConsumed(drinker, drink, "action")
     ListenerScript.AddIngameEventToConversation(drinker.GetDisplayName() + " drank a " + drink.GetName() + ".")
 endFunction
+
+float property LivingWorldDrinkReachUnits = 710.0 auto hidden   ; about 10 m
+
+; The nearest bottle of ale, mead, wine... standing in the drinker's cell within reach (inns and homes
+; have them on tables and shelves). Not one in the player's hand.
+ObjectReference function LwNearbyBottle(Actor drinker)
+    Cell c = drinker.GetParentCell()
+    if (!c)
+        return None
+    endIf
+    ObjectReference best = None
+    float bestDistance = LivingWorldDrinkReachUnits
+    int n = c.GetNumRefs(46)   ; kAlchemy: potions, food and drink placed in the world
+    int i = 0
+    while (i < n)
+        ObjectReference ref = c.GetNthRef(i, 46)
+        if (ref && ref.IsEnabled() && !ref.IsDeleted() && ref.GetDistance(PlayerRef) > 60.0)
+            Potion p = ref.GetBaseObject() as Potion
+            if (p && p.IsFood() && !p.IsPoison() && LivingWorldIsAlcohol(p.GetName()))
+                float d = drinker.GetDistance(ref)
+                if (d < bestDistance)
+                    best = ref
+                    bestDistance = d
+                endIf
+            endIf
+        endIf
+        i += 1
+    endWhile
+    return best
+endFunction
+
+Event OnLwDrinkFetch(Form npcForm, Form bottleForm)
+    Actor npc = npcForm as Actor
+    ObjectReference bottle = bottleForm as ObjectReference
+    if (!npc || !bottle)
+        return
+    endIf
+    ; "I'll sit and have a drink": let them reach the seat first
+    float until = Utility.GetCurrentRealTime() + 12.0
+    while (_lwOrderActors && _lwOrderActors.Find(npc) >= 0 && !LwIsSeated(npc) && Utility.GetCurrentRealTime() < until)
+        Utility.Wait(1.0)
+    endWhile
+    if (npc.GetDistance(bottle) > 150.0)
+        npc.PathToReference(bottle, 1.0)   ; a sit order brings them back to their seat afterwards
+    endIf
+    if (npc.IsDead() || npc.IsInCombat() || !bottle.IsEnabled() || bottle.IsDeleted() || npc.GetDistance(bottle) > 300.0)
+        ListenerScript.AddIngameEventToConversation(npc.GetDisplayName() + " went for a bottle but did not get to it.")
+        return
+    endIf
+    Potion drink = bottle.GetBaseObject() as Potion
+    bottle.Disable()
+    bottle.Delete()
+    npc.AddItem(drink, 1, true)
+    npc.EquipItem(drink, false, true)   ; an NPC equipping a potion drinks it
+    LivingWorldConsumed(npc, drink, "action")
+    ListenerScript.AddIngameEventToConversation(npc.GetDisplayName() + " took a " + drink.GetName() + " from nearby and drank it.")
+EndEvent
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; LIVINGWORLD PATCH: actions (sit, stand up, go there)                                              ;
@@ -2311,6 +2519,9 @@ endFunction
 function LwSitOne(Actor npc, string kind)
     if (!npc || npc == PlayerRef)
         return
+    endIf
+    if (kind != "pointed" && LwIsSeated(npc))
+        return   ; "I'll sit with you" while already sitting: stay put
     endIf
     if (kind == "")
         kind = "pointed"
