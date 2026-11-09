@@ -323,6 +323,7 @@ endFunction
 event OnUpdate()
     repository.LivingWorldGuardBedRetry() ; LIVINGWORLD PATCH: guard careers, a pending barracks bunk
     LivingWorldWatchTick() ; LIVINGWORLD PATCH: guard careers G2e, someone comes over on the player's shift
+    repository.LivingWorldJailTick() ; LIVINGWORLD PATCH: guard careers G2f, prisoners: lock up, keep in, let out
     ; If no Mantella conversation active
     if !conversation.IsRunning()
         if repository.radiantEnabled || repository.approachEnabled
