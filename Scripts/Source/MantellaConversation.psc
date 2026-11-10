@@ -191,6 +191,9 @@ function ContinueConversation(string nextAction, int handle)
         if(SKSE_HTTP.hasKey(handle, "mantella_lw_arousal_key")) ; LIVINGWORLD PATCH: the arousal key (MANTELLA_LW_AROUSAL_KEY)
             repository.LwSetArousalKey(SKSE_HTTP.getInt(handle, "mantella_lw_arousal_key", 76))
         endif
+        if(SKSE_HTTP.hasKey(handle, "mantella_lw_fog_on")) ; LIVINGWORLD PATCH: fog, the people the player knows by name
+            repository.LivingWorldFogSet(SKSE_HTTP.getBool(handle, "mantella_lw_fog_on", false), SKSE_HTTP.getStringArray(handle, "mantella_lw_fog_known"), self)
+        endif
         repository.LivingWorldWatchWalkAway() ; LIVINGWORLD PATCH: walking away ends the conversation
         ;Debug.Notification("Conversation started.")
         RequestContinueConversation()
@@ -352,6 +355,12 @@ function ProcessNpcSpeak(int handle)
     if(SKSE_HTTP.hasKey(handle, "mantella_lw_body")) ; LIVINGWORLD PATCH: body language (BL1), expression profiles that changed
         repository.LivingWorldBodyProfiles(SKSE_HTTP.getStringArray(handle, "mantella_lw_body"), self)
     endif
+    if(SKSE_HTTP.hasKey(handle, "mantella_lw_fog_reveal")) ; LIVINGWORLD PATCH: fog, names the player just learned
+        repository.LivingWorldFogReveal(SKSE_HTTP.getStringArray(handle, "mantella_lw_fog_reveal"), self)
+    endif
+    if(SKSE_HTTP.hasKey(handle, "mantella_lw_fog_marker_ids")) ; LIVINGWORLD PATCH: fog, places the NPC just told the player about
+        repository.LivingWorldFogMarkers(SKSE_HTTP.getIntArray(handle, "mantella_lw_fog_marker_ids"), SKSE_HTTP.getStringArray(handle, "mantella_lw_fog_marker_plugins"), SKSE_HTTP.getStringArray(handle, "mantella_lw_fog_marker_names"))
+    endif
     if(SKSE_HTTP.hasKey(handle, "mantella_lw_mood")) ; LIVINGWORLD PATCH: mood meter, sent when the NPC's mood changes
         Debug.Notification(SKSE_HTTP.getString(handle, "mantella_lw_mood", ""))
     endif
@@ -445,7 +454,7 @@ function NpcSpeak(Actor actorSpeaking, string lineToSay, Topic topicToUse, bool 
 endfunction
 
 string function GetActorName(actor actorToGetName)
-    string actorName = actorToGetName.GetDisplayName()
+    string actorName = LivingWorldFog.RealName(actorToGetName) ; LIVINGWORLD PATCH: fog, the real name even while shown as a stranger
     int actorID = actorToGetName.GetFactionRank(MantellaConversationParticipantsFaction)
     if actorID > 0
         actorName = actorName + " " + actorID
@@ -479,7 +488,7 @@ Actor function GetActorByName(string actorName)
             Actor nearbyActor = _cachedNearbyActors[i]
             if nearbyActor != None
                 ; Match by display name (nearby actors don't have numbered suffixes)
-                if nearbyActor.GetDisplayName() == actorName
+                if LivingWorldFog.RealName(nearbyActor) == actorName ; LIVINGWORLD PATCH: fog
                     return nearbyActor
                 endIf
             endIf
@@ -916,7 +925,7 @@ Function AddActors(Actor[] actorsToAdd)
             if (possibleNewActor != PlayerRef) ; ignore the player having the same name as an actor
                 While (j < Participants.GetSize()) && (break==false)
                     Actor currentActor = Participants.GetAt(j) as Actor
-                    if (currentActor.GetDisplayName() == possibleNewActor.GetDisplayName())
+                    if (LivingWorldFog.RealName(currentActor) == LivingWorldFog.RealName(possibleNewActor)) ; LIVINGWORLD PATCH: fog
                         nameCount += 1
                         if (currentActor == possibleNewActor) ; stop counting when the exact actor is found (not just the same name)
                             break = true
@@ -1102,6 +1111,11 @@ int function buildActorSetting(Actor actorToBuild)
     SKSE_HTTP.setInt(handle, mConsts.KEY_ACTOR_REFID, (actorToBuild as form).getformid())
     AddLivingWorldPluginNames(handle, actorToBuild) ; LIVINGWORLD PATCH
     AddLivingWorldGuardInfo(handle, actorToBuild) ; LIVINGWORLD PATCH: guard careers
+    if (actorToBuild == PlayerRef) ; LIVINGWORLD PATCH: fog, what a stranger sees (the player) or what the player sees while unknown
+        SKSE_HTTP.setString(handle, "mantella_lw_fog_label", LivingWorldFog.Describe(actorToBuild))
+    else
+        SKSE_HTTP.setString(handle, "mantella_lw_fog_label", LivingWorldFog.StrangerLabel(actorToBuild))
+    endif
     SKSE_HTTP.setString(handle, mConsts.KEY_ACTOR_NAME, GetActorName(actorToBuild))
     bool isPlayerCharacter = actorToBuild == PlayerRef
     SKSE_HTTP.setBool(handle, mConsts.KEY_ACTOR_ISPLAYER, isPlayerCharacter)
@@ -1194,7 +1208,7 @@ int[] function BuildNearbyActorsContext()
         Actor nearbyActor = nearbyActors[i]
         if nearbyActor != None
             int actorHandle = SKSE_HTTP.createDictionary()
-            SKSE_HTTP.setString(actorHandle, "name", nearbyActor.GetDisplayName())
+            SKSE_HTTP.setString(actorHandle, "name", LivingWorldFog.RealName(nearbyActor)) ; LIVINGWORLD PATCH: fog
             float distanceInMeters = PlayerRef.GetDistance(nearbyActor) * toMeters
             SKSE_HTTP.setFloat(actorHandle, "distance", distanceInMeters)
             nearbyActorHandles[handleIndex] = actorHandle
@@ -1262,7 +1276,7 @@ function TriggerApproachMoveAction(Actor approachingActor)
 
     int argumentsHandle = SKSE_HTTP.createDictionary()
     string[] sources = Utility.CreateStringArray(1)
-    sources[0] = approachingActor.GetDisplayName()
+    sources[0] = LivingWorldFog.RealName(approachingActor) ; LIVINGWORLD PATCH: fog
     SKSE_HTTP.setStringArray(argumentsHandle, mConsts.ACTION_ARG_SOURCE, sources)
     SKSE_HTTP.setString(argumentsHandle, mConsts.ACTION_ARG_TARGET, PlayerRef.GetDisplayName())
 

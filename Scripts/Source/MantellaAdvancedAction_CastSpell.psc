@@ -90,6 +90,6 @@ Spell Function GetSpellFromActor(string SpellNameToFind, actor currentActor)
     ; Give immediate player feedback if spell not found
     Debug.Notification(currentActor.GetDisplayName() + " does not know the spell " + SpellNameToFind)
     ; Give full details to LLM
-    EventInterface.AddMantellaEvent(currentActor.GetDisplayName() + " does not know the spell " + SpellNameToFind + ". Available spells: " + availableSpells)
+    EventInterface.AddMantellaEvent(LivingWorldFog.RealName(currentActor) + " does not know the spell " + SpellNameToFind + ". Available spells: " + availableSpells)
     return none
 Endfunction
