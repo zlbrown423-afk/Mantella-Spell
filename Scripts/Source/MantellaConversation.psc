@@ -188,6 +188,9 @@ function ContinueConversation(string nextAction, int handle)
         if(SKSE_HTTP.hasKey(handle, "mantella_lw_intimacy_on")) ; LIVINGWORLD PATCH: intimate scenes (OStim) on or off
             repository.LivingWorldIntimacyOn = SKSE_HTTP.getBool(handle, "mantella_lw_intimacy_on", true)
         endif
+        if(SKSE_HTTP.hasKey(handle, "mantella_lw_arousal_key")) ; LIVINGWORLD PATCH: the arousal key (MANTELLA_LW_AROUSAL_KEY)
+            repository.LwSetArousalKey(SKSE_HTTP.getInt(handle, "mantella_lw_arousal_key", 76))
+        endif
         repository.LivingWorldWatchWalkAway() ; LIVINGWORLD PATCH: walking away ends the conversation
         ;Debug.Notification("Conversation started.")
         RequestContinueConversation()
