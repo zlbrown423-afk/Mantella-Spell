@@ -314,7 +314,7 @@ function LivingWorldWatchTick()
         actors[1] = chosen
         conversation.Start()
         Debug.Notification(chosen.GetDisplayName() + " comes over to you.")
-        conversation.AddIngameEvent(chosen.GetDisplayName() + " comes over to " + getPlayerName(False) + ", who is on guard duty.")
+        conversation.AddIngameEvent(LivingWorldFog.RealName(chosen) + " comes over to " + getPlayerName(False) + ", who is on guard duty.")
         conversation.StartConversation(actors)
         conversation.TriggerApproachMoveAction(chosen)
     endIf
@@ -404,7 +404,7 @@ event OnUpdate()
 
                     conversation.Start()
                     Debug.Notification(chosenActor.GetDisplayName() + " approaches...")
-                    conversation.AddIngameEvent(chosenActor.GetDisplayName() + " approaches " + getPlayerName(False) + " with something on their mind.")
+                    conversation.AddIngameEvent(LivingWorldFog.RealName(chosenActor) + " approaches " + getPlayerName(False) + " with something on their mind.")
                     conversation.StartConversation(actors)
                     conversation.TriggerApproachMoveAction(chosenActor)
                 elseif (repository.showRadiantDialogueMessages)

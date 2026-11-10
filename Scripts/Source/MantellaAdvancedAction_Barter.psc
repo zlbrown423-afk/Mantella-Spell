@@ -29,6 +29,6 @@ endEvent
 Function NpcBarter(Actor source)
     if source
         source.ShowBarterMenu()
-        EventInterface.AddMantellaEvent(source.GetDisplayName() + "'s barter menu opened.")
+        EventInterface.AddMantellaEvent(LivingWorldFog.RealName(source) + "'s barter menu opened.")
     endif
 EndFunction

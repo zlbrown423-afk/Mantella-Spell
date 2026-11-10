@@ -578,7 +578,7 @@ function LivingWorldRecordGrab(Actor target, string node, string area, string ha
     if (target != _lwLastSaidTarget || now - _lwLastSaidAt >= LivingWorldGrabLineCooldown)
         _lwLastSaidTarget = target
         _lwLastSaidAt = now
-        ListenerScript.AddIngameEventToConversation(PlayerRef.GetDisplayName() + " grabbed " + target.GetDisplayName() + " by the " + part + " for " + (seconds as int) + " seconds.")
+        ListenerScript.AddIngameEventToConversation(PlayerRef.GetDisplayName() + " grabbed " + LivingWorldFog.RealName(target) + " by the " + part + " for " + (seconds as int) + " seconds.")
     endIf
 endFunction
 
@@ -867,7 +867,7 @@ function LivingWorldReactNow()
     if (guard)
         LivingWorldQueue(LivingWorldHeader("react") + "|actor=" + LivingWorldActorField(guard) + "|target=" + LivingWorldActorField(PlayerRef) + "|via=guard|party=" + LivingWorldActorField(target) + "|area=" + area + "|dur=" + seconds)
     endIf
-    string who = target.GetDisplayName()
+    string who = LivingWorldFog.RealName(target)
     string player = PlayerRef.GetDisplayName()
     string ev
     if (held)
@@ -879,7 +879,7 @@ function LivingWorldReactNow()
     if (guard)
         actors = new Actor[3]
         actors[2] = guard
-        ev += " " + guard.GetDisplayName() + ", a guard, saw it and comes over to step in."
+        ev += " " + LivingWorldFog.RealName(guard) + ", a guard, saw it and comes over to step in."
     else
         actors = new Actor[2]
     endIf
@@ -1212,7 +1212,7 @@ string function LivingWorldActorField(Actor a)
     if (a == PlayerRef)
         isPlayer = "1"
     endIf
-    return refId + "^" + baseId + "^" + conv.LivingWorldPluginName(refId) + "^" + conv.LivingWorldPluginName(baseId) + "^" + isPlayer + "^" + a.GetDisplayName()
+    return refId + "^" + baseId + "^" + conv.LivingWorldPluginName(refId) + "^" + conv.LivingWorldPluginName(baseId) + "^" + isPlayer + "^" + LivingWorldFog.RealName(a) ; LIVINGWORLD PATCH: fog
 endFunction
 
 ; One "|w=" entry per NPC near the event: distance (m), line of sight, and the game's own relationship
@@ -2365,6 +2365,9 @@ endFunction
 ; Players usually point at the chair, then look back at the NPC while speaking, so the pointed
 ; furniture and place are remembered separately from whatever the crosshair is on now.
 Event OnCrosshairRefChange(ObjectReference ref)
+    if (LivingWorldFogSynced && ref as Actor) ; LIVINGWORLD PATCH: fog, the name over the crosshair is right before it shows
+        LivingWorldFog.Apply(ref as Actor, LivingWorldFogKnown, LivingWorldFogOn)
+    endIf
     LwNotePointed(ref)
 EndEvent
 
@@ -3728,7 +3731,11 @@ function LwBodyScan()
             p += 1
         endWhile
     endIf
-    LwBodyAdd(Game.FindClosestActorFromRef(PlayerRef, LwBodyWatchMeters * 71.0210), now)
+    Actor closest = Game.FindClosestActorFromRef(PlayerRef, LwBodyWatchMeters * 71.0210)
+    if (closest && LivingWorldFogSynced) ; LIVINGWORLD PATCH: fog, someone who walks up and greets the player
+        LivingWorldFog.Apply(closest, LivingWorldFogKnown, LivingWorldFogOn)
+    endIf
+    LwBodyAdd(closest, now)
 endFunction
 
 function LwBodyAdd(Actor a, float now)
@@ -4582,4 +4589,78 @@ EndEvent
 
 bool function LwEyesCovered()
     return _lwEyesCovered
+endFunction
+
+; ---- LIVINGWORLD PATCH: fog (names unknown until told; livingworld/fog on the server) ----
+; Kept in the save, so an older save brings back the names the player knew then. Off until the server
+; first says (with a conversation start), so nobody is hidden before the server has sent who the player knows.
+bool LivingWorldFogSynced = false
+bool LivingWorldFogOn = false
+string[] LivingWorldFogKnown
+
+; The start reply: fog on or off, and every real name the player knows
+function LivingWorldFogSet(bool fogOn, string[] known, MantellaConversation conv)
+    LivingWorldFogOn = fogOn
+    LivingWorldFogKnown = known
+    LivingWorldFogSynced = true
+    LivingWorldFogSweep(conv)
+endFunction
+
+; An NPC line: names the player just learned
+function LivingWorldFogReveal(string[] names, MantellaConversation conv)
+    if (!names || names.Length == 0)
+        return
+    endIf
+    if (!LivingWorldFogKnown)
+        LivingWorldFogKnown = Utility.CreateStringArray(0)
+    endIf
+    int i = 0
+    while (i < names.Length)
+        if (names[i] != "" && LivingWorldFogKnown.Find(names[i]) < 0)
+            LivingWorldFogKnown = Utility.ResizeStringArray(LivingWorldFogKnown, LivingWorldFogKnown.Length + 1)
+            LivingWorldFogKnown[LivingWorldFogKnown.Length - 1] = names[i]
+        endIf
+        i += 1
+    endWhile
+    LivingWorldFogSweep(conv)
+endFunction
+
+; The conversation's people and the ones nearby, shown by name or as strangers
+function LivingWorldFogSweep(MantellaConversation conv)
+    if (!LivingWorldFogSynced || !conv)
+        return
+    endIf
+    FormList participants = conv.Participants
+    int p = 0
+    while (p < participants.GetSize())
+        LivingWorldFog.Apply(participants.GetAt(p) as Actor, LivingWorldFogKnown, LivingWorldFogOn)
+        p += 1
+    endWhile
+    Actor[] nearby = conv.GetCachedNearbyActors()
+    int n = 0
+    while (nearby && n < nearby.Length)
+        if (nearby[n])
+            LivingWorldFog.Apply(nearby[n], LivingWorldFogKnown, LivingWorldFogOn)
+        endIf
+        n += 1
+    endWhile
+endFunction
+
+; An NPC line: places the NPC told the player about get their map marker (not marked as visited)
+function LivingWorldFogMarkers(int[] ids, string[] plugins, string[] names)
+    int i = 0
+    while (ids && i < ids.Length)
+        string plugin = "Skyrim.esm"
+        if (plugins && i < plugins.Length && plugins[i] != "")
+            plugin = plugins[i]
+        endIf
+        ObjectReference marker = Game.GetFormFromFile(ids[i], plugin) as ObjectReference
+        if (marker)
+            marker.AddToMap(false)
+            if (names && i < names.Length)
+                Debug.Notification(names[i] + " added to your map")
+            endIf
+        endIf
+        i += 1
+    endWhile
 endFunction

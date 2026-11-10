@@ -25,6 +25,6 @@ endEvent
 Function NpcInventory(Actor source)
     if (source)
         source.OpenInventory(true)
-        EventInterface.AddMantellaEvent(source.GetDisplayName() + "'s inventory opened.")
+        EventInterface.AddMantellaEvent(LivingWorldFog.RealName(source) + "'s inventory opened.")
     endif
 EndFunction
