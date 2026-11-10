@@ -160,6 +160,8 @@ event OnHttpReplyReceived(int typedDictionaryHandle)
     ; Debug.Trace((Utility.GetCurrentRealTime() - httpReceivedTime) + " seconds to determine reply type", 2)
     IF replyType == mConsts.KEY_REPLYTTYPE_INITCOMPLETED
         None
+    ElseIf replyType == "mantella_lw_diary" ; LIVINGWORLD PATCH: diary pages (LWDiary.esp); not part of any conversation
+        LivingWorldDiaryPages(typedDictionaryHandle)
     ElseIf (replyType != "error")
         ContinueConversation(replyType, typedDictionaryHandle)        
     Else
@@ -206,6 +208,7 @@ function ContinueConversation(string nextAction, int handle)
         if(SKSE_HTTP.hasKey(handle, "mantella_lw_fog_on")) ; LIVINGWORLD PATCH: fog, the people the player knows by name
             repository.LivingWorldFogSet(SKSE_HTTP.getBool(handle, "mantella_lw_fog_on", false), SKSE_HTTP.getStringArray(handle, "mantella_lw_fog_known"), self)
         endif
+        LivingWorldDiaryKeepers(handle) ; LIVINGWORLD PATCH: participants who keep a diary (LWDiary.esp)
         repository.LivingWorldWatchWalkAway() ; LIVINGWORLD PATCH: walking away ends the conversation
         ;Debug.Notification("Conversation started.")
         RequestContinueConversation()
@@ -887,6 +890,60 @@ event OnHttpErrorReceived(int typedDictionaryHandle)
         CleanupConversation()
     EndIf
 endEvent
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;   LIVINGWORLD PATCH: diaries  ;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; People the player talks with a lot keep a diary (MantellaExtension livingworld/diary). The book, where it
+; lies and reading it are LWDiary.esp's (Mantella-Spell Tools/LWDiary); this only passes the server's word on.
+; Without LWDiary.esp nobody listens to these events and nothing happens.
+
+function LivingWorldDiaryKeepers(int handle)
+    if (!SKSE_HTTP.hasKey(handle, "mantella_lw_diary_ref_ids"))
+        return
+    endIf
+    int[] refIds = SKSE_HTTP.getIntArray(handle, "mantella_lw_diary_ref_ids")
+    int[] npcIds = SKSE_HTTP.getIntArray(handle, "mantella_lw_diary_npc_ids")
+    string[] titles = SKSE_HTTP.getStringArray(handle, "mantella_lw_diary_titles")
+    string worldId = PlayerRef.GetDisplayName() + repository.worldID
+    int i = 0
+    while (i < refIds.Length && i < npcIds.Length && i < titles.Length)
+        Actor keeper = Game.GetForm(refIds[i]) as Actor
+        if (keeper && !keeper.IsChild())
+            int eventHandle = ModEvent.Create("LivingWorld_DiaryKeeper")
+            if (eventHandle)
+                ModEvent.PushForm(eventHandle, keeper)
+                ModEvent.PushInt(eventHandle, npcIds[i])
+                ModEvent.PushString(eventHandle, titles[i])
+                ModEvent.PushString(eventHandle, worldId)
+                ModEvent.PushInt(eventHandle, repository.HttpPort)
+                ModEvent.Send(eventHandle)
+            endIf
+        endIf
+        i += 1
+    endWhile
+endFunction
+
+; The server's answer to LWDiary asking for a diary's pages. Mod events carry no arrays, so the pages go
+; joined with "<pg>" between them.
+function LivingWorldDiaryPages(int handle)
+    string[] pages = SKSE_HTTP.getStringArray(handle, "mantella_lw_diary_pages")
+    string joined = ""
+    int i = 0
+    while (pages && i < pages.Length)
+        if (i > 0)
+            joined += "<pg>"
+        endIf
+        joined += pages[i]
+        i += 1
+    endWhile
+    int eventHandle = ModEvent.Create("LivingWorld_DiaryPages")
+    if (eventHandle)
+        ModEvent.PushString(eventHandle, SKSE_HTTP.getString(handle, "mantella_lw_diary_title", "Diary"))
+        ModEvent.PushString(eventHandle, joined)
+        ModEvent.Send(eventHandle)
+    endIf
+endFunction
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;            Access           ;
