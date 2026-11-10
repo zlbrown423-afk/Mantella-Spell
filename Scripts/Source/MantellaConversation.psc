@@ -405,6 +405,9 @@ function ProcessNpcSpeak(int handle)
     if(SKSE_HTTP.hasKey(handle, "mantella_lw_guard_release")) ; LIVINGWORLD PATCH: guard careers G2f, prisoners let out
         repository.LivingWorldRelease(SKSE_HTTP.getIntArray(handle, "mantella_lw_guard_release"))
     endif
+    if(SKSE_HTTP.hasKey(handle, "mantella_lw_fine_gold")) ; LIVINGWORLD PATCH: a guard's fine for public nakedness, paid on the spot
+        repository.LwPayFine(GetActorByName(SKSE_HTTP.getString(handle, "mantella_lw_fine_guard", "")), SKSE_HTTP.getInt(handle, "mantella_lw_fine_gold", 0))
+    endif
     if(SKSE_HTTP.hasKey(handle, "mantella_lw_guard_issue_ids")) ; LIVINGWORLD PATCH: guard careers, the uniform a guard leader hands over
         int[] lwIssueCounts ; LIVINGWORLD PATCH: G2 wages, how many of each (gold)
         if(SKSE_HTTP.hasKey(handle, "mantella_lw_guard_issue_counts"))

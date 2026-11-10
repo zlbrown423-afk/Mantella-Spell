@@ -4771,10 +4771,11 @@ bool property LwPeekOn = true auto hidden
 string[] property LwCouples auto hidden
 float property LwConfrontMeters = 10.0 auto hidden      ; a partner further than this has not really walked in on it
 float property LwConfrontCooldown = 120.0 auto hidden   ; seconds between confrontations, any scene
-float property LwDecencyGraceSeconds = 20.0 auto hidden ; naked this long before a guard minds (changing clothes is fine)
-float property LwDecencyCooldown = 180.0 auto hidden    ; seconds between guards coming over about it
-float property LwDecencyScanSeconds = 8.0 auto hidden   ; how often to look for a guard while naked
-float property LwDecencyGuardMeters = 20.0 auto hidden
+; (set again on every load in LwRegisterConfrontAndDecency: a save keeps the values it was first given)
+float property LwDecencyGraceSeconds = 5.0 auto hidden  ; naked this long before a guard minds (changing clothes is fine)
+float property LwDecencyCooldown = 120.0 auto hidden    ; seconds between guards coming over about it
+float property LwDecencyScanSeconds = 1.5 auto hidden   ; how often to look for a guard while naked (every 2 s regular check)
+float property LwDecencyGuardMeters = 35.0 auto hidden
 float property LwPeekMeters = 6.0 auto hidden
 
 bool[] _lwScConfronted      ; per scene slot: someone already walked in on it
@@ -4798,6 +4799,10 @@ function LwRegisterConfrontAndDecency()
     _lwDecencyGuard = None
     _lwNakedSince = 0.0
     _lwPlayerHouseKw = Keyword.GetKeyword("LocTypePlayerHouse")
+    LwDecencyGraceSeconds = 5.0      ; build22: guards notice sooner and from further away (build21: 20 s, 8 s, 20 m, 180 s)
+    LwDecencyScanSeconds = 1.5
+    LwDecencyGuardMeters = 35.0
+    LwDecencyCooldown = 120.0
     RegisterForModEvent("LivingWorld_Confront", "OnLwConfront")
     RegisterForModEvent("LivingWorld_Decency", "OnLwDecency")
 endFunction
@@ -4995,7 +5000,7 @@ Actor function LwDecencyFindGuard()
         near = LivingWorldPO3.PeopleNear(PlayerRef, LwDecencyGuardMeters * 71.0210, _lwActorTypeNPC)
     endIf
     if (!near || near.Length == 0)
-        near = ListenerScript.ScanNearbyActors()
+        near = LwPeopleInCell()   ; Mantella's nearby scan only had the five nearest people, rarely a guard outdoors
     endIf
     Actor best = None
     float bestM = 100000.0
@@ -5014,6 +5019,27 @@ Actor function LwDecencyFindGuard()
     return best
 endFunction
 
+; Every person in the player's cell (SKSE Cell.GetNthRef, form type 62 = Character), up to 40.
+Actor[] function LwPeopleInCell()
+    Actor[] people = new Actor[40]
+    Cell here = PlayerRef.GetParentCell()
+    if (!here)
+        return people
+    endIf
+    int total = here.GetNumRefs(62)
+    int n = 0
+    int i = 0
+    while (i < total && n < 40)
+        Actor a = here.GetNthRef(i, 62) as Actor
+        if (a && a != PlayerRef && !a.IsDisabled())
+            people[n] = a
+            n += 1
+        endIf
+        i += 1
+    endWhile
+    return people
+endFunction
+
 Event OnLwDecency(string eventName, string strArg, float numArg, Form sender)
     Actor guard = _lwDecencyGuard
     _lwDecencyGuard = None
@@ -5021,15 +5047,42 @@ Event OnLwDecency(string eventName, string strArg, float numArg, Form sender)
     if (!guard || guard.IsDead() || conv.IsRunning())
         return
     endIf
+    Debug.Notification(guard.GetDisplayName() + " saw you naked and is coming over.")
+    if (guard.GetDistance(PlayerRef) / 71.0210 > 3.0)
+        guard.PathToReference(PlayerRef, 1.0)   ; at a run (latent: this event's own stack), then talk face to face
+    endIf
+    if (conv.IsRunning() || guard.IsDead() || guard.IsInCombat())
+        return
+    endIf
     Actor[] actors = new Actor[2]
     actors[0] = PlayerRef
     actors[1] = guard
     conv.Start()
-    Debug.Notification(guard.GetDisplayName() + " saw you naked and comes over.")
-    conv.AddIngameEvent(LivingWorldFog.RealName(guard) + ", a guard, sees " + PlayerRef.GetDisplayName() + " walking about naked in public and comes over about it.")
+    conv.AddIngameEvent(LivingWorldFog.RealName(guard) + ", a guard, saw " + PlayerRef.GetDisplayName() + " walking about naked in public and has hurried over about it.")
     conv.StartConversation(actors)
-    conv.TriggerApproachMoveAction(guard)
+    guard.EvaluatePackage()
 EndEvent
+
+; A guard's PayFine (MantellaExtension guard/decency.py): the fine for public nakedness goes from the player to the
+; guard, as much of it as the player has.
+function LwPayFine(Actor guard, int gold)
+    MiscObject coin = Game.GetFormFromFile(0x0000000F, "Skyrim.esm") as MiscObject   ; Gold001
+    if (!coin || gold <= 0)
+        return
+    endIf
+    int have = PlayerRef.GetItemCount(coin)
+    int take = gold
+    if (have < take)
+        take = have
+    endIf
+    if (take > 0)
+        PlayerRef.RemoveItem(coin, take, true, guard)
+    endIf
+    Debug.Notification("Fine paid: " + take + " gold")
+    if (take < gold)
+        ListenerScript.AddIngameEventToConversation(PlayerRef.GetDisplayName() + " only had " + take + " of the " + gold + " gold fine on them.")
+    endIf
+endFunction
 
 ; Wandering eyes, one body-language step: returns true while her glance down is in progress.
 ; The more readily she looks (_lwbPeek, from the server: attraction, liking, her mood, her nature), the more
