@@ -188,6 +188,18 @@ function ContinueConversation(string nextAction, int handle)
         if(SKSE_HTTP.hasKey(handle, "mantella_lw_intimacy_on")) ; LIVINGWORLD PATCH: intimate scenes (OStim) on or off
             repository.LivingWorldIntimacyOn = SKSE_HTTP.getBool(handle, "mantella_lw_intimacy_on", true)
         endif
+        if(SKSE_HTTP.hasKey(handle, "mantella_lw_confront_on")) ; LIVINGWORLD PATCH: partners walking in on a scene (MANTELLA_LW_CONFRONT)
+            repository.LwConfrontOn = SKSE_HTTP.getBool(handle, "mantella_lw_confront_on", true)
+        endIf
+        if(SKSE_HTTP.hasKey(handle, "mantella_lw_couples")) ; LIVINGWORLD PATCH: who is with whom, "A|B"
+            repository.LwCouples = SKSE_HTTP.getStringArray(handle, "mantella_lw_couples")
+        endIf
+        if(SKSE_HTTP.hasKey(handle, "mantella_lw_decency_on")) ; LIVINGWORLD PATCH: guards and a naked player (MANTELLA_LW_DECENCY)
+            repository.LwDecencyOn = SKSE_HTTP.getBool(handle, "mantella_lw_decency_on", true)
+        endIf
+        if(SKSE_HTTP.hasKey(handle, "mantella_lw_peek_on")) ; LIVINGWORLD PATCH: women's glances at a naked player (MANTELLA_LW_PEEK)
+            repository.LwPeekOn = SKSE_HTTP.getBool(handle, "mantella_lw_peek_on", true)
+        endIf
         if(SKSE_HTTP.hasKey(handle, "mantella_lw_arousal_key")) ; LIVINGWORLD PATCH: the arousal key (MANTELLA_LW_AROUSAL_KEY)
             repository.LwSetArousalKey(SKSE_HTTP.getInt(handle, "mantella_lw_arousal_key", 76))
         endif
