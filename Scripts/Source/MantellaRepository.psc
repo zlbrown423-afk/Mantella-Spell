@@ -1671,6 +1671,12 @@ string function LivingWorldAttireRecord(Actor a)
     if (_lwScAny && LwInScene(a) >= 0)
         rec += "|via=scene"   ; clothes off for an intimate scene: the scene's own record covers it
     endIf
+    if (a == PlayerRef && cover == "none")
+        float size = LwPlayerGenitalScale()
+        if (size > 0.0)
+            rec += "|psize=" + size   ; The New Gentleman: women who see him may notice (MantellaExtension intimacy/size.py)
+        endIf
+    endIf
     if (cover == "none")
         rec += LivingWorldWitnesses(a, None)   ; who could see them: only worked out when it matters
     endIf
