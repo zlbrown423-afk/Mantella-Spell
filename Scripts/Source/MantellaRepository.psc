@@ -316,6 +316,8 @@ Event OnKeyDown(int KeyCode)
                     conversation.AddIngameEvent(gameEventEntry)
                 endIf
             endIf
+        elseIf (KeyCode == LwArousalKey && LwArousalKey > 0) ; LIVINGWORLD PATCH: arousal (rapid taps raise it)
+            LwArousalTap()
         elseIf KeyCode == MantellaRadiantHotkey
             radiantEnabled =! radiantEnabled
             if radiantEnabled == True
@@ -1812,10 +1814,18 @@ string function LivingWorldAttireRecord(Actor a)
     if (_lwScAny && LwInScene(a) >= 0)
         rec += "|via=scene"   ; clothes off for an intimate scene: the scene's own record covers it
     endIf
-    if (a == PlayerRef && cover == "none")
-        float size = LwPlayerGenitalScale()
-        if (size > 0.0)
-            rec += "|psize=" + size   ; The New Gentleman: women who see him may notice (MantellaExtension intimacy/size.py)
+    if (a == PlayerRef)
+        if (cover == "none")
+            float size = LwPlayerGenitalScale()
+            if (size > 0.0)
+                rec += "|psize=" + size   ; The New Gentleman: women who see him may notice (MantellaExtension intimacy/size.py)
+            endIf
+        endIf
+        if (_lwErectShown)
+            rec += "|erect=1"   ; visibly aroused (shows only when the body slot is empty)
+        endIf
+        if (_lwEyesCovered)
+            rec += "|eyes=1"    ; the player's eyes are covered: cannot see, can still hear
         endIf
     endIf
     if (cover == "none")
@@ -3932,6 +3942,9 @@ function LwRegisterIntimacy()
     _lwScSlap = new int[4]
     _lwScClimax = new int[4]
     _lwScForced = new bool[4]
+    _lwScW = new Actor[32]
+    _lwScWLos = new bool[32]
+    _lwScWM = new float[32]
     int i = 0
     while (i < 4)
         _lwScThread[i] = -1
@@ -3943,6 +3956,8 @@ function LwRegisterIntimacy()
     RegisterForModEvent("ostim_thread_end", "OnLwOStimEnd")
     RegisterForModEvent("ostim_actor_orgasm", "OnLwOStimClimax")
     RegisterForModEvent("ostim_event", "OnLwOStimEvent")
+    RegisterForModEvent("LivingWorld_SceneWatch", "OnLwSceneWatch")
+    LwRegisterArousalAndEyes()
 endFunction
 
 int function LwSceneSlot(int threadId)
@@ -4008,8 +4023,10 @@ string function LwSceneHitLine(Actor target)
 endFunction
 
 function LwSceneSay(int slot, string text, bool always)
-    if (_lwScA[slot * 3] != PlayerRef && !ListenerScript.conversation.IsRunning())
-        return
+    if (_lwScA[slot * 3] != PlayerRef)
+        if (!ListenerScript.conversation.IsRunning() || !_lwScA[slot * 3 + 1] || _lwScA[slot * 3 + 1].GetDistance(PlayerRef) / 71.0210 > LivingWorldWitnessScanMeters)
+            return   ; other people's scene: only a conversation close enough to see it hears of it
+        endIf
     endIf
     float now = Utility.GetCurrentRealTime()
     if (!always && now - _lwScLineAt < LwSceneLineSeconds)
@@ -4070,6 +4087,7 @@ int function LwSceneBegin(int threadId)
     _lwScSlap[slot] = 0
     _lwScClimax[slot] = 0
     _lwScForced[slot] = false
+    LwSceneClearWitnesses(slot)
     _lwScAny = true
     ; a hand already holding a partner when the scene starts: that hold belongs to the scene now
     if (_lwLeftHeld && LwInScene(_lwLeftHeld) == slot && _lwScA[slot * 3] == PlayerRef)
@@ -4079,6 +4097,7 @@ int function LwSceneBegin(int threadId)
         _lwRightHeld = None
     endIf
     LwBodyLetGo(slot)
+    SendModEvent("LivingWorld_SceneWatch", "", threadId as float)   ; who sees it, all through the scene
     return slot
 endFunction
 
@@ -4165,6 +4184,7 @@ Event OnLwOStimClimax(string eventName, string sceneId, float numArg, Form sende
     int slot = LwSceneSlot(numArg as int)
     if (slot >= 0)
         _lwScClimax[slot] = _lwScClimax[slot] + 1
+        LwSceneClimaxRecord(slot, sender as Actor)
     endIf
 EndEvent
 
@@ -4215,7 +4235,8 @@ endFunction
 function LwSceneFlush(int slot)
     string names = LwSceneNames(slot)
     string rec = LivingWorldHeader("scene") + "|via=end" + LwSceneFields(slot)
-    rec += LivingWorldWitnesses(_lwScA[slot * 3], _lwScA[slot * 3 + 1])
+    LwSceneSample(slot)
+    rec += LwSceneWitnessFields(slot)   ; everyone who saw any part of it, not only who is there at the end
     LivingWorldQueue(rec)
     LwSceneSay(slot, "The intimate scene between " + names + " has ended.", true)
     _lwScThread[slot] = -1
@@ -4241,4 +4262,293 @@ string[] function LwSceneSnapshot()
         slot += 1
     endWhile
     return result
+endFunction
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; LIVINGWORLD PATCH: who sees an intimate scene, climaxes, arousal, covered eyes                     ;
+; Witnesses: every few seconds while a scene runs (the player's own or one between NPCs), the adult ;
+; people near it are looked at and the best view each had is kept (up to 8 a scene). The end record ;
+; lists all of them, so someone who walked in and left again still saw it. Children never count.    ;
+; Climax: OStim's ostim_actor_orgasm (the sender is who climaxed) queues a "climax" record with the ;
+; scene's current OStim action types, so the server can tell where it landed (OCum shows it).      ;
+; Arousal: rapid taps of LwArousalKey raise the player's erection (The New Gentleman's own          ;
+; SOSBend animation events, TNG 4.2.7 TNG_MCM.RiseAndDrop); one lone tap lets it go down; after     ;
+; LwArousalHoldSeconds without a tap it goes down by itself. Crossing "visibly aroused" queues an    ;
+; "arousal" record, with witnesses when the player has nothing on the body.                         ;
+; Covered eyes: the LWCoverEyes plugin's power darkens the screen and sends                         ;
+; LivingWorld_EyesCovered (1 covered, 0 not); an "eyes" record tells the NPCs around.               ;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+float property LwSceneWatchSeconds = 4.0 auto hidden
+Actor[] _lwScW        ; 4 slots x 8 witnesses
+bool[] _lwScWLos      ; whether they had a line of sight (the best they had)
+float[] _lwScWM       ; how far they were then (m)
+
+function LwSceneClearWitnesses(int slot)
+    if (!_lwScW)
+        _lwScW = new Actor[32]
+        _lwScWLos = new bool[32]
+        _lwScWM = new float[32]
+    endIf
+    int k = 0
+    while (k < 8)
+        _lwScW[slot * 8 + k] = None
+        _lwScWLos[slot * 8 + k] = false
+        _lwScWM[slot * 8 + k] = 0.0
+        k += 1
+    endWhile
+endFunction
+
+Event OnLwSceneWatch(string eventName, string strArg, float numArg, Form sender)
+    int threadId = numArg as int
+    int slot = LwSceneSlot(threadId)
+    while (slot >= 0)
+        LwSceneSample(slot)
+        Utility.Wait(LwSceneWatchSeconds)
+        slot = LwSceneSlot(threadId)
+    endWhile
+EndEvent
+
+; Looks at the adult people around the scene now and keeps the best view each had.
+function LwSceneSample(int slot)
+    Actor doer = _lwScA[slot * 3]
+    Actor center = _lwScA[slot * 3 + 1]
+    if (!doer || !center || !center.Is3DLoaded())
+        return
+    endIf
+    Actor[] near = LivingWorldPO3.PeopleNear(center, LivingWorldWitnessScanMeters * 71.0210, _lwActorTypeNPC)
+    if (!near || near.Length == 0)
+        near = ListenerScript.ScanNearbyActors()   ; no Papyrus Extender: Mantella's five nearest to the player
+    endIf
+    int i = 0
+    while (i < near.Length)
+        Actor w = near[i]
+        if (w && w != PlayerRef && LivingWorldIsPerson(w) && LwInScene(w) < 0)
+            float meters = w.GetDistance(center) / 71.0210
+            if (meters <= LivingWorldWitnessScanMeters)
+                LwSceneKeepWitness(slot, w, meters, w.HasLOS(center) || w.HasLOS(doer))
+            endIf
+        endIf
+        i += 1
+    endWhile
+endFunction
+
+function LwSceneKeepWitness(int slot, Actor w, float meters, bool los)
+    int base = slot * 8
+    int k = 0
+    int free = -1
+    while (k < 8)
+        Actor known = _lwScW[base + k]
+        if (known == w)
+            if ((los && !_lwScWLos[base + k]) || (los == _lwScWLos[base + k] && meters < _lwScWM[base + k]))
+                _lwScWLos[base + k] = los
+                _lwScWM[base + k] = meters
+            endIf
+            return
+        elseIf (!known && free < 0)
+            free = base + k
+        endIf
+        k += 1
+    endWhile
+    if (free >= 0)
+        _lwScW[free] = w
+        _lwScWLos[free] = los
+        _lwScWM[free] = meters
+    endIf
+endFunction
+
+; The kept witnesses as "|w=" fields (same layout as LivingWorldWitnesses).
+string function LwSceneWitnessFields(int slot)
+    Actor doer = _lwScA[slot * 3]
+    Actor target = _lwScA[slot * 3 + 1]
+    string result = ""
+    int k = 0
+    while (k < 8)
+        Actor w = _lwScW[slot * 8 + k]
+        if (w)
+            string los = "0"
+            if (_lwScWLos[slot * 8 + k])
+                los = "1"
+            endIf
+            string rankTarget = ""
+            if (target)
+                rankTarget = w.GetRelationshipRank(target) as string
+            endIf
+            result += "|w=" + _lwScWM[slot * 8 + k] + "^" + los + "^" + w.GetRelationshipRank(doer) + "^" + rankTarget + "^" + LivingWorldActorField(w)
+        endIf
+        k += 1
+    endWhile
+    return result
+endFunction
+
+; Someone in a followed scene climaxed. One record, with what the scene is doing right now.
+function LwSceneClimaxRecord(int slot, Actor who)
+    if (!who || !LivingWorldIntimacyOn || LwInScene(who) != slot)
+        return
+    endIf
+    Actor onto = None
+    int k = 0
+    while (k < 3 && !onto)
+        Actor a = _lwScA[slot * 3 + k]
+        if (a && a != who)
+            onto = a
+        endIf
+        k += 1
+    endWhile
+    if (!onto)
+        return
+    endIf
+    string[] types = LivingWorldOStim.ActionTypes(_lwScScene[slot])
+    string acts = ""
+    int i = 0
+    while (i < types.Length)
+        if (types[i] != "")
+            if (acts != "")
+                acts += ","
+            endIf
+            acts += types[i]
+        endIf
+        i += 1
+    endWhile
+    string sex = "m"
+    if (who.GetActorBase().GetSex() == 1)
+        sex = "f"
+    endIf
+    LwSceneSample(slot)
+    LivingWorldQueue(LivingWorldHeader("climax") + "|thread=" + _lwScThread[slot] + "|scene=" + _lwScScene[slot] + "|actor=" + LivingWorldActorField(who) + "|target=" + LivingWorldActorField(onto) + "|acts=" + acts + "|sex=" + sex + LwSceneWitnessFields(slot))
+    LwSceneSay(slot, who.GetDisplayName() + " reaches climax with " + onto.GetDisplayName() + ".", true)
+endFunction
+
+; ---- arousal (The New Gentleman) ----
+
+int property LwArousalKey = 76 auto hidden            ; DirectX scan code; 76 = NumPad 5. The server can change it.
+float property LwArousalTapGap = 0.6 auto hidden       ; taps closer together than this are "rapid"
+float property LwArousalHoldSeconds = 120.0 auto hidden
+int property LwArousalVisibleLevel = -4 auto hidden   ; TNG bend from -10 (soft) to 9: from here on it shows
+int _lwErect = -10
+float _lwTapAt = -100.0
+int _lwArousalWatch = 0
+bool _lwErectShown = false
+bool _lwEyesCovered = false
+int _lwArousalKeyBound = 0
+
+function LwRegisterArousalAndEyes()
+    RegisterForModEvent("LivingWorld_ArousalLone", "OnLwArousalLone")
+    RegisterForModEvent("LivingWorld_ArousalFade", "OnLwArousalFade")
+    RegisterForModEvent("LivingWorld_EyesCovered", "OnLwEyesCovered")
+    LwSetArousalKey(LwArousalKey)
+    _lwErect = -10        ; animation graphs start over on a load
+    _lwErectShown = false
+endFunction
+
+; The start reply's mantella_lw_arousal_key (MANTELLA_LW_AROUSAL_KEY); 0 switches the key off.
+function LwSetArousalKey(int keyCode)
+    if (_lwArousalKeyBound > 0 && _lwArousalKeyBound != keyCode)
+        UnregisterForKey(_lwArousalKeyBound)
+        _lwArousalKeyBound = 0
+    endIf
+    LwArousalKey = keyCode
+    if (keyCode > 0 && _lwArousalKeyBound != keyCode)
+        RegisterForKey(keyCode)
+        _lwArousalKeyBound = keyCode
+    endIf
+endFunction
+
+function LwArousalTap()
+    if (!LivingWorldIntimacyOn || PlayerRef.GetActorBase().GetSex() != 0)
+        return   ; The New Gentleman's erection is for men
+    endIf
+    float now = Utility.GetCurrentRealTime()
+    bool rapid = now - _lwTapAt <= LwArousalTapGap
+    _lwTapAt = now
+    if (rapid)
+        LwSetErect(_lwErect + 3)
+    elseIf (_lwErect > -10)
+        SendModEvent("LivingWorld_ArousalLone", "", now)   ; a lone tap lets it go down, unless more follow at once
+    endIf
+    _lwArousalWatch += 1
+    SendModEvent("LivingWorld_ArousalFade", "", _lwArousalWatch as float)
+endFunction
+
+Event OnLwArousalLone(string eventName, string strArg, float tapAt, Form sender)
+    Utility.Wait(LwArousalTapGap + 0.1)
+    if (_lwTapAt == tapAt)
+        LwSetErect(-10)
+    endIf
+EndEvent
+
+Event OnLwArousalFade(string eventName, string strArg, float token, Form sender)
+    Utility.Wait(LwArousalHoldSeconds)
+    while (token == _lwArousalWatch && _lwErect > -10)
+        if (_lwScAny && LwInScene(PlayerRef) >= 0)
+            return   ; OStim drives it during a scene
+        endIf
+        LwSetErect(_lwErect - 2)
+        Utility.Wait(3.0)
+    endWhile
+EndEvent
+
+function LwSetErect(int level)
+    if (level > 9)
+        level = 9
+    endIf
+    if (level <= -10)
+        level = -10
+        Debug.SendAnimationEvent(PlayerRef, "SOSFlaccid")
+    else
+        Debug.SendAnimationEvent(PlayerRef, "SOSBend" + level)
+    endIf
+    _lwErect = level
+    bool shown = level >= LwArousalVisibleLevel
+    if (shown != _lwErectShown)
+        _lwErectShown = shown
+        LwArousalRecord(shown)
+    endIf
+endFunction
+
+function LwArousalRecord(bool erect)
+    string cover = LivingWorldCover(PlayerRef)
+    string via = "soft"
+    if (erect)
+        via = "erect"
+    endIf
+    string rec = LivingWorldHeader("arousal") + "|via=" + via + "|actor=" + LivingWorldActorField(PlayerRef) + "|cover=" + cover + "|level=" + _lwErect
+    float size = LwPlayerGenitalScale()
+    if (size > 0.0)
+        rec += "|psize=" + size
+    endIf
+    bool inScene = _lwScAny && LwInScene(PlayerRef) >= 0
+    if (cover == "none" && !inScene)
+        rec += LivingWorldWitnesses(PlayerRef, None)
+    endIf
+    LivingWorldQueue(rec)
+    if (erect && cover == "none" && !inScene && ListenerScript.conversation.IsRunning())
+        ListenerScript.AddIngameEventToConversation(PlayerRef.GetDisplayName() + " is naked and visibly aroused.")
+    endIf
+endFunction
+
+; ---- covered eyes (LWCoverEyes plugin) ----
+
+Event OnLwEyesCovered(string eventName, string strArg, float covered, Form sender)
+    bool now = covered > 0.5
+    if (now == _lwEyesCovered)
+        return
+    endIf
+    _lwEyesCovered = now
+    string via = "uncovered"
+    string line = PlayerRef.GetDisplayName() + " uncovers their eyes and can see again."
+    if (now)
+        via = "covered"
+        line = PlayerRef.GetDisplayName() + " covers their eyes and cannot see anything, but can still hear everything."
+    endIf
+    if (LivingWorldPerceptionOn)
+        LivingWorldQueue(LivingWorldHeader("eyes") + "|via=" + via + "|actor=" + LivingWorldActorField(PlayerRef) + LivingWorldWitnesses(PlayerRef, None))
+    endIf
+    if (ListenerScript.conversation.IsRunning())
+        ListenerScript.AddIngameEventToConversation(line)
+    endIf
+EndEvent
+
+bool function LwEyesCovered()
+    return _lwEyesCovered
 endFunction
