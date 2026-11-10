@@ -1911,6 +1911,9 @@ Event OnUpdate()
                 _lwPlayerCovered = covered
                 LivingWorldQueue(LivingWorldAttireRecord(PlayerRef))
             endIf
+            if (LwDecencyOn)
+                LwDecencyTick(now)   ; LIVINGWORLD PATCH: a guard who sees the player naked comes over
+            endIf
         endIf
         if (LivingWorldHygieneOn)
             LwHygieneTick()
@@ -3514,6 +3517,11 @@ float[] _lwbProfComfort
 float[] _lwbProfGaze
 float[] _lwbProfGuard
 bool[] _lwbProfStep
+float[] _lwbProfPeek        ; how readily she glances at the naked player (-1: not sent)
+float[] _lwbPeek            ; per slot
+float[] _lwbPeekUntil       ; per slot: a glance down in progress until then
+float[] _lwbNextPeekAt
+float[] _lwbPeekRecAt
 int _lwbProfNext = 0
 float _lwbDueAt = 0.0
 float _lwbScanDueAt = 0.0
@@ -3561,6 +3569,18 @@ function LwBodyReset()
     _lwbReact2 = new float[4]
     _lwbReact3 = new float[4]
     _lwbReact4 = new float[4]
+    _lwbPeek = new float[4]
+    _lwbPeekUntil = new float[4]
+    _lwbNextPeekAt = new float[4]
+    _lwbPeekRecAt = new float[4]
+    if (!_lwbProfPeek || _lwbProfPeek.Length != 16 || !_lwbProfActors || _lwbProfActors.Length != 16)
+        _lwbProfPeek = new float[16]
+        int k = 0
+        while (k < 16)
+            _lwbProfPeek[k] = -1.0   ; no peek from the server yet: the default from the relationship rank
+            k += 1
+        endWhile
+    endIf
     if (!_lwbProfActors || _lwbProfActors.Length != 16)
         _lwbProfActors = new Actor[16]
         _lwbProfComfort = new float[16]
@@ -3579,7 +3599,7 @@ endFunction
 function LwBodyRelease(int i)
     Actor a = _lwbActors[i]
     if (a)
-        if (_lwbLookHeld[i] || _lwbGlanceUntil[i] > 0.0)
+        if (_lwbLookHeld[i] || _lwbGlanceUntil[i] > 0.0 || (_lwbPeekUntil && _lwbPeekUntil[i] > 0.0))
             a.ClearLookAt()
         endIf
         if (_lwbHeadAwayUntil[i] > 0.0)
@@ -3601,6 +3621,9 @@ function LwBodyRelease(int i)
     _lwbOffsetUntil[i] = 0.0
     _lwbArmsUntil[i] = 0.0
     _lwbStareSince[i] = 0.0
+    if (_lwbPeekUntil)
+        _lwbPeekUntil[i] = 0.0
+    endIf
 endFunction
 
 ; The server's start reply says whether body language is on (mantella_lw_body_on). Off lets everyone go.
@@ -3621,7 +3644,7 @@ function LivingWorldSetBodyLanguage(bool on)
     endIf
 endFunction
 
-; The server's profiles (mantella_lw_body on an NPC line): "Name|comfort|gaze|guard|step".
+; The server's profiles (mantella_lw_body on an NPC line): "Name|comfort|gaze|guard|step|peek" (peek: newer servers).
 function LivingWorldBodyProfiles(string[] profiles, MantellaConversation conv)
     if (!profiles || !_lwbProfActors)
         return
@@ -3642,6 +3665,13 @@ function LivingWorldBodyProfiles(string[] profiles, MantellaConversation conv)
                 _lwbProfGaze[at] = parts[2] as float
                 _lwbProfGuard[at] = parts[3] as float
                 _lwbProfStep[at] = parts[4] == "1"
+                if (_lwbProfPeek)
+                    if (parts.Length >= 6)
+                        _lwbProfPeek[at] = parts[5] as float
+                    else
+                        _lwbProfPeek[at] = -1.0
+                    endIf
+                endIf
                 int slot = _lwbActors.Find(a)
                 if (slot >= 0)
                     LwBodyLoadProfile(slot, a)
@@ -3654,14 +3684,19 @@ endFunction
 
 function LwBodyLoadProfile(int i, Actor a)
     int at = _lwbProfActors.Find(a)
+    int rank = a.GetRelationshipRank(PlayerRef)
+    _lwbPeek[i] = LwPeekDefault(a, rank)
     if (at >= 0)
         _lwbComfort[i] = _lwbProfComfort[at]
         _lwbGaze[i] = _lwbProfGaze[at]
         _lwbGuard[i] = _lwbProfGuard[at]
         _lwbStep[i] = _lwbProfStep[at]
+        if (_lwbProfPeek && _lwbProfPeek[at] >= 0.0)
+            _lwbPeek[i] = _lwbProfPeek[at]
+        endIf
         return
     endIf
-    int rank = a.GetRelationshipRank(PlayerRef)   ; no profile yet: a default from how they know the player
+    ; no profile yet: a default from how they know the player
     _lwbComfort[i] = 1.0
     _lwbGaze[i] = 0.5
     _lwbGuard[i] = 0.3
@@ -3886,6 +3921,10 @@ function LwBodyStep(int i, Actor a, float now, bool weaponDrawnNow, bool inTalk)
         LwBodyRecord(a, "weapon", "|dist=" + d)
     endIf
 
+    if (LwBodyPeek(i, a, d, now, inTalk, busy))
+        return   ; her eyes are down on the naked player for a moment
+    endIf
+
     ; gaze: Mantella sets look-at between speakers in its conversations, so only outside them
     if (inTalk || busy)
         if (_lwbLookHeld[i] || _lwbGlanceUntil[i] > 0.0)
@@ -4000,6 +4039,7 @@ function LwRegisterIntimacy()
     RegisterForModEvent("ostim_event", "OnLwOStimEvent")
     RegisterForModEvent("LivingWorld_SceneWatch", "OnLwSceneWatch")
     LwRegisterArousalAndEyes()
+    LwRegisterConfrontAndDecency() ; LIVINGWORLD PATCH: caught in the act, public decency
 endFunction
 
 int function LwSceneSlot(int threadId)
@@ -4141,6 +4181,9 @@ int function LwSceneBegin(int threadId)
     _lwScSlap[slot] = 0
     _lwScClimax[slot] = 0
     _lwScForced[slot] = false
+    if (_lwScConfronted)
+        _lwScConfronted[slot] = false
+    endIf
     LwSceneClearWitnesses(slot)
     _lwScAny = true
     ; a hand already holding a partner when the scene starts: that hold belongs to the scene now
@@ -4403,7 +4446,11 @@ function LwSceneSample(int slot, bool once = true)
         if (w && w != PlayerRef && LivingWorldIsPerson(w) && LwInScene(w) < 0)
             float meters = w.GetDistance(center) / 71.0210
             if (meters <= LivingWorldWitnessScanMeters)
-                LwSceneKeepWitness(slot, w, meters, w.HasLOS(center) || w.HasLOS(doer))
+                bool sees = w.HasLOS(center) || w.HasLOS(doer)
+                LwSceneKeepWitness(slot, w, meters, sees)
+                if (sees && meters <= LwConfrontMeters && LwConfrontOn)
+                    LwMaybeConfront(slot, w)   ; their own partner in it: they walk in and speak up
+                endIf
             endIf
         endIf
         i += 1
@@ -4702,4 +4749,366 @@ function LivingWorldFogMarkers(int[] ids, string[] plugins, string[] names)
         endIf
         i += 1
     endWhile
+endFunction
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; LIVINGWORLD PATCH: caught in the act, public decency, wandering eyes                              ;
+; Caught: while a scene is watched (LwSceneSample), a witness with a clear view of their own partner ;
+; in it, from close by, walks in on it and speaks up. Partners are vanilla lovers (rank 4) or a      ;
+; couple from the server's list (mantella_lw_couples, "A|B" real names, MantellaExtension           ;
+; intimacy/confront.py). They join a running conversation, or one starts with them, the scene's      ;
+; people and the player (only when the player is close enough to hear it). Once per scene.           ;
+; Decency: the player has had nothing on the body slot for a while, outside water, a scene or their  ;
+; own house, and a guard close by can see them: the guard comes over (react record via=decency,     ;
+; guard/decency.py says what they do: a warning, then a fine).                                       ;
+; Wandering eyes: see LwBodyPeek (body language). A woman's glance down at the naked player.         ;
+; The server's start reply switches each (mantella_lw_confront_on / _decency_on / _peek_on).        ;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+bool property LwConfrontOn = true auto hidden
+bool property LwDecencyOn = true auto hidden
+bool property LwPeekOn = true auto hidden
+string[] property LwCouples auto hidden
+float property LwConfrontMeters = 10.0 auto hidden      ; a partner further than this has not really walked in on it
+float property LwConfrontCooldown = 120.0 auto hidden   ; seconds between confrontations, any scene
+float property LwDecencyGraceSeconds = 20.0 auto hidden ; naked this long before a guard minds (changing clothes is fine)
+float property LwDecencyCooldown = 180.0 auto hidden    ; seconds between guards coming over about it
+float property LwDecencyScanSeconds = 8.0 auto hidden   ; how often to look for a guard while naked
+float property LwDecencyGuardMeters = 20.0 auto hidden
+float property LwPeekMeters = 6.0 auto hidden
+
+bool[] _lwScConfronted      ; per scene slot: someone already walked in on it
+float _lwConfrontAt = -1000.0
+Actor _lwConfrontWho
+Actor _lwConfrontPartner
+int _lwConfrontSlot = -1
+float _lwNakedSince = 0.0   ; real time the player's body slot went empty (0: covered)
+float _lwSwamAt = -1000.0
+float _lwDecencyAt = -1000.0
+float _lwDecencyScanAt = -1000.0
+Actor _lwDecencyGuard
+Keyword _lwPlayerHouseKw
+ObjectReference _lwPeekMarker
+
+; Called from LwRegisterIntimacy on every load.
+function LwRegisterConfrontAndDecency()
+    _lwScConfronted = new bool[4]
+    _lwConfrontWho = None
+    _lwConfrontPartner = None
+    _lwDecencyGuard = None
+    _lwNakedSince = 0.0
+    _lwPlayerHouseKw = Keyword.GetKeyword("LocTypePlayerHouse")
+    RegisterForModEvent("LivingWorld_Confront", "OnLwConfront")
+    RegisterForModEvent("LivingWorld_Decency", "OnLwDecency")
+endFunction
+
+; The name the server knows someone by (the player by their own name).
+string function LwRealName(Actor a)
+    if (a == PlayerRef)
+        return PlayerRef.GetDisplayName()
+    endIf
+    return LivingWorldFog.RealName(a)
+endFunction
+
+bool function LwArePartners(Actor a, Actor b)
+    if (!a || !b || a == b)
+        return false
+    endIf
+    if (a.GetRelationshipRank(b) >= 4)
+        return true   ; vanilla lovers: spouses are set up this way
+    endIf
+    if (!LwCouples || LwCouples.Length == 0)
+        return false
+    endIf
+    string na = LwRealName(a)
+    string nb = LwRealName(b)
+    return LwCouples.Find(na + "|" + nb) >= 0 || LwCouples.Find(nb + "|" + na) >= 0
+endFunction
+
+; From LwSceneSample: a witness who can see the scene from close by. Starts a confrontation when one of the
+; scene's people is their partner. The conversation itself starts on its own stack (OnLwConfront).
+function LwMaybeConfront(int slot, Actor w)
+    if (!LivingWorldIntimacyOn || !_lwScConfronted || _lwScConfronted[slot] || _lwScForced[slot] || _lwConfrontWho)
+        return   ; a forced scene is an assault, not a lovers' quarrel (the server remembers it that way)
+    endIf
+    float now = Utility.GetCurrentRealTime()
+    if (now - _lwConfrontAt < LwConfrontCooldown || w.IsInCombat() || w.GetSleepState() >= 3 || w.IsUnconscious())
+        return
+    endIf
+    Actor partner = None
+    int k = 0
+    while (k < 3 && !partner)
+        Actor p = _lwScA[slot * 3 + k]
+        if (p && LwArePartners(w, p))
+            partner = p
+        endIf
+        k += 1
+    endWhile
+    if (!partner)
+        return
+    endIf
+    _lwScConfronted[slot] = true
+    _lwConfrontAt = now
+    _lwConfrontWho = w
+    _lwConfrontPartner = partner
+    _lwConfrontSlot = slot
+    SendModEvent("LivingWorld_Confront")
+endFunction
+
+Event OnLwConfront(string eventName, string strArg, float numArg, Form sender)
+    Actor w = _lwConfrontWho
+    Actor partner = _lwConfrontPartner
+    int slot = _lwConfrontSlot
+    _lwConfrontWho = None
+    _lwConfrontPartner = None
+    if (!w || !partner || slot < 0 || _lwScThread[slot] < 0)
+        return
+    endIf
+    LwConfront(slot, w, partner)
+EndEvent
+
+function LwConfront(int slot, Actor w, Actor partner)
+    MantellaConversation conv = ListenerScript.conversation
+    string who = LwRealName(w)
+    string partnerName = LwRealName(partner)
+    string others = ""
+    int k = 0
+    while (k < 3)
+        Actor p = _lwScA[slot * 3 + k]
+        if (p && p != partner && p != w)
+            if (others != "")
+                others += " and "
+            endIf
+            others += LwRealName(p)
+        endIf
+        k += 1
+    endWhile
+    string ev
+    if (partner == PlayerRef)
+        ev = who + " walks in on " + partnerName + " being intimate with " + others + ". " + who + " is " + partnerName + "'s own partner and confronts them about it right now."
+    else
+        ev = who + " walks in on " + partnerName + ", " + who + "'s own partner, being intimate with " + others + ", and confronts them about it right now."
+    endIf
+    bool playerIn = _lwScA[slot * 3] == PlayerRef
+    Actor center = _lwScA[slot * 3 + 1]
+    Debug.Trace("Mantella Living World: " + who + " walks in on " + partnerName + " (scene slot " + slot + ")")
+    if (conv.IsRunning())
+        if (!conv.Participants.HasForm(w))
+            Actor[] add = new Actor[1]
+            add[0] = w
+            conv.AddActorsToConversation(add)
+        endIf
+        Debug.Notification(w.GetDisplayName() + " has walked in on you.")
+        conv.AddIngameEvent(ev)
+        return
+    endIf
+    if (!playerIn && (!center || center.GetDistance(PlayerRef) / 71.0210 > LivingWorldWitnessScanMeters))
+        return   ; nobody to hear it; the scene's end record still keeps what they saw
+    endIf
+    Actor[] actors = new Actor[5]
+    actors[0] = PlayerRef
+    actors[1] = w
+    int n = 2
+    k = 0
+    while (k < 3 && n < 5)
+        Actor q = _lwScA[slot * 3 + k]
+        if (q && q != PlayerRef && q != w)
+            actors[n] = q
+            n += 1
+        endIf
+        k += 1
+    endWhile
+    Actor[] people = LwTrimActors(actors, n)
+    conv.Start()
+    Debug.Notification(w.GetDisplayName() + " has walked in on you.")
+    conv.AddIngameEvent(ev)
+    conv.StartConversation(people)
+    if (playerIn)
+        conv.TriggerApproachMoveAction(w)
+    endIf
+endFunction
+
+Actor[] function LwTrimActors(Actor[] arr, int n)
+    if (n == 3)
+        Actor[] three = new Actor[3]
+        three[0] = arr[0]
+        three[1] = arr[1]
+        three[2] = arr[2]
+        return three
+    elseIf (n == 4)
+        Actor[] four = new Actor[4]
+        four[0] = arr[0]
+        four[1] = arr[1]
+        four[2] = arr[2]
+        four[3] = arr[3]
+        return four
+    elseIf (n == 2)
+        Actor[] two = new Actor[2]
+        two[0] = arr[0]
+        two[1] = arr[1]
+        return two
+    endIf
+    return arr
+endFunction
+
+; From the regular checks (every 2 s): the player naked in public long enough, and a guard who can see it.
+function LwDecencyTick(float now)
+    if (_lwPlayerCovered)
+        _lwNakedSince = 0.0
+        return
+    endIf
+    if (PlayerRef.IsSwimming())
+        _lwSwamAt = now   ; bathing: and for a little while after getting out
+    endIf
+    if (_lwNakedSince == 0.0)
+        _lwNakedSince = now
+        return
+    endIf
+    if (now - _lwNakedSince < LwDecencyGraceSeconds || now - _lwSwamAt < 45.0 || now - _lwDecencyAt < LwDecencyCooldown || now - _lwDecencyScanAt < LwDecencyScanSeconds)
+        return
+    endIf
+    if (_lwDecencyGuard || ListenerScript.conversation.IsRunning() || PlayerRef.IsInCombat() || PlayerRef.GetSitState() != 0 || Utility.IsInMenuMode())
+        return   ; sitting or lying down (a bed) is not walking about
+    endIf
+    if (_lwScAny && LwInScene(PlayerRef) >= 0)
+        return
+    endIf
+    Location here = PlayerRef.GetCurrentLocation()
+    if (here && _lwPlayerHouseKw && here.HasKeyword(_lwPlayerHouseKw))
+        return
+    endIf
+    _lwDecencyScanAt = now
+    Actor guard = LwDecencyFindGuard()
+    if (!guard)
+        return
+    endIf
+    _lwDecencyAt = now
+    _lwDecencyGuard = guard
+    LivingWorldQueue(LivingWorldHeader("react") + "|actor=" + LivingWorldActorField(guard) + "|target=" + LivingWorldActorField(PlayerRef) + "|via=decency|dur=" + (now - _lwNakedSince))
+    SendModEvent("LivingWorld_Decency")   ; the conversation starts on its own stack, not the timer's
+endFunction
+
+; The nearest guard within LwDecencyGuardMeters who can see the player and is free to come over, or None.
+Actor function LwDecencyFindGuard()
+    Actor[] near
+    if (!_lwNoPo3 && _lwActorTypeNPC)
+        near = LivingWorldPO3.PeopleNear(PlayerRef, LwDecencyGuardMeters * 71.0210, _lwActorTypeNPC)
+    endIf
+    if (!near || near.Length == 0)
+        near = ListenerScript.ScanNearbyActors()
+    endIf
+    Actor best = None
+    float bestM = 100000.0
+    int i = 0
+    while (i < near.Length)
+        Actor a = near[i]
+        if (a && a != PlayerRef && a.IsGuard() && LivingWorldIsPerson(a) && !a.IsInCombat() && !a.IsInDialogueWithPlayer() && a.GetSleepState() < 3 && !a.IsHostileToActor(PlayerRef))
+            float m = a.GetDistance(PlayerRef) / 71.0210
+            if (m <= LwDecencyGuardMeters && m < bestM && a.HasLOS(PlayerRef))
+                best = a
+                bestM = m
+            endIf
+        endIf
+        i += 1
+    endWhile
+    return best
+endFunction
+
+Event OnLwDecency(string eventName, string strArg, float numArg, Form sender)
+    Actor guard = _lwDecencyGuard
+    _lwDecencyGuard = None
+    MantellaConversation conv = ListenerScript.conversation
+    if (!guard || guard.IsDead() || conv.IsRunning())
+        return
+    endIf
+    Actor[] actors = new Actor[2]
+    actors[0] = PlayerRef
+    actors[1] = guard
+    conv.Start()
+    Debug.Notification(guard.GetDisplayName() + " saw you naked and comes over.")
+    conv.AddIngameEvent(LivingWorldFog.RealName(guard) + ", a guard, sees " + PlayerRef.GetDisplayName() + " walking about naked in public and comes over about it.")
+    conv.StartConversation(actors)
+    conv.TriggerApproachMoveAction(guard)
+EndEvent
+
+; Wandering eyes, one body-language step: returns true while her glance down is in progress.
+; The more readily she looks (_lwbPeek, from the server: attraction, liking, her mood, her nature), the more
+; often the chance comes and the likelier she takes it. Only a woman, only while the player is naked with The
+; New Gentleman's bone on him, within LwPeekMeters and in her line of sight. In a conversation too: her look
+; goes back to the player's face afterwards, where Mantella had it.
+bool function LwBodyPeek(int i, Actor a, float d, float now, bool inTalk, bool busy)
+    if (!_lwbPeekUntil || !_lwbPeek)
+        return false
+    endIf
+    if (_lwbPeekUntil[i] > 0.0)
+        if (now < _lwbPeekUntil[i] && d <= LwPeekMeters + 1.0 && !_lwPlayerCovered && !busy)
+            LwPeekMarkerFollow()
+            return true
+        endIf
+        _lwbPeekUntil[i] = 0.0
+        if (inTalk || _lwbLookHeld[i])
+            a.SetLookAt(PlayerRef)
+        else
+            a.ClearLookAt()
+        endIf
+        return false
+    endIf
+    if (!LwPeekOn || _lwPlayerCovered || busy || d > LwPeekMeters || now < _lwbNextPeekAt[i])
+        return false
+    endIf
+    float peek = _lwbPeek[i]
+    if (peek <= 0.0 || a.GetActorBase().GetSex() != 1 || (_lwScAny && LwInScene(a) >= 0))
+        return false
+    endIf
+    if (_lwErectShown)
+        peek += 0.15
+    endIf
+    _lwbNextPeekAt[i] = now + 6.0 + 18.0 * (1.0 - peek) + Utility.RandomFloat(0.0, 4.0)
+    if (Utility.RandomFloat(0.0, 1.0) > peek || LwPlayerGenitalScale() <= 0.0 || !a.HasLOS(PlayerRef))
+        return false
+    endIf
+    if (!LwPeekMarkerFollow())
+        return false
+    endIf
+    a.SetLookAt(_lwPeekMarker)
+    _lwbPeekUntil[i] = now + 1.2 + 1.2 * peek
+    if (now - _lwbPeekRecAt[i] >= 60.0)
+        _lwbPeekRecAt[i] = now
+        LwBodyRecord(a, "peek", "|dist=" + d)   ; so her next line knows she looked (changes no feelings)
+    endIf
+    return true
+endFunction
+
+; No profile from the server yet: from how she knows the player.
+float function LwPeekDefault(Actor a, int rank)
+    if (a.GetActorBase().GetSex() != 1)
+        return 0.0
+    elseIf (rank >= 2)
+        return 0.45
+    elseIf (rank == 1)
+        return 0.35
+    elseIf (rank < 0)
+        return 0.05
+    endIf
+    return 0.25
+endFunction
+
+; An invisible marker at the player's groin for her to look at (XMarker, Skyrim.esm 0x3B).
+bool function LwPeekMarkerFollow()
+    if (!_lwPeekMarker)
+        Form xm = Game.GetFormFromFile(0x0000003B, "Skyrim.esm")
+        if (!xm)
+            return false
+        endIf
+        _lwPeekMarker = PlayerRef.PlaceAtMe(xm, 1, true)
+        if (!_lwPeekMarker)
+            return false
+        endIf
+    endIf
+    if (NetImmerse.HasNode(PlayerRef, "NPC GenitalsBase [GenBase]", false))
+        _lwPeekMarker.MoveToNode(PlayerRef, "NPC GenitalsBase [GenBase]")
+    else
+        _lwPeekMarker.MoveToNode(PlayerRef, "NPC Pelvis [Pelv]")
+    endIf
+    return true
 endFunction
