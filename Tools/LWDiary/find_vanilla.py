@@ -11,9 +11,9 @@ import sys
 import zlib
 from pathlib import Path
 
-TABLE = re.compile(r'table', re.I)
+TABLE = re.compile(r'(?<!s)table', re.I)   # not 'stable'
 NOT_TABLE = re.compile(r'tablet|alchemy|enchant|smith|workbench|tanning|cook|sign|chair|bench|stool|grind|altar|'
-                       r'map|cloth|marker|fx|rug|cart|collision|shelf|counter', re.I)
+                       r'map|cloth|marker|fx|rug|cart|collision|shelf|counter|candle', re.I)
 JOURNAL = re.compile(r'journal', re.I)
 
 
