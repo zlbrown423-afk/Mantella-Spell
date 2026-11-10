@@ -1847,7 +1847,8 @@ string[] function LivingWorldAttireSnapshot()
     endIf
     Actor[] nearby = ListenerScript.ScanNearbyActors()
     FormList participants = ListenerScript.conversation.Participants
-    int total = 1 + participants.GetSize() + nearby.Length
+    int partCount = participants.GetSize()   ; read once: the list can change while this loop waits on calls
+    int total = 1 + partCount + nearby.Length
     Actor[] done = new Actor[30]
     int doneCount = 0
     string[] result = Utility.CreateStringArray(0)
@@ -1856,12 +1857,12 @@ string[] function LivingWorldAttireSnapshot()
         Actor a
         if (i == 0)
             a = PlayerRef
-        elseIf (i <= participants.GetSize())
+        elseIf (i <= partCount)
             a = participants.GetAt(i - 1) as Actor
         else
-            a = nearby[i - 1 - participants.GetSize()]
+            a = nearby[i - 1 - partCount]
         endIf
-        if (LivingWorldIsPerson(a) && done.Find(a) < 0 && a.GetDistance(PlayerRef) / 71.0210 <= LivingWorldWitnessScanMeters)
+        if (a && LivingWorldIsPerson(a) && done.Find(a) < 0 && a.GetDistance(PlayerRef) / 71.0210 <= LivingWorldWitnessScanMeters)
             done[doneCount] = a
             doneCount += 1
             result = Utility.ResizeStringArray(result, result.Length + 1)
@@ -4601,6 +4602,7 @@ Event OnLwArousalStep(string eventName, string strArg, float numArg, Form sender
 EndEvent
 
 function LwArousalTap()
+    Debug.Trace("[LivingWorld] arousal key: intimacy=" + LivingWorldIntimacyOn + " sex=" + PlayerRef.GetActorBase().GetSex() + " level=" + _lwErect)
     if (!LivingWorldIntimacyOn || PlayerRef.GetActorBase().GetSex() != 0)
         return   ; The New Gentleman's erection is for men
     endIf
