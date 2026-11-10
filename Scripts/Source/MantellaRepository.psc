@@ -3966,12 +3966,14 @@ int[] _lwScTouch
 int[] _lwScSlap
 int[] _lwScClimax
 bool[] _lwScForced
+int[] _lwScGen             ; per slot: bumped each time a scene takes the slot, so only its newest watch loop runs
 bool _lwScAny = false      ; any slot in use: keeps the grab and hit handlers free when no scene runs
 float _lwScLineAt = -100.0
 
 ; Called from LivingWorldRegisterPerception on every load. OStim does not carry scenes across a load.
 function LwRegisterIntimacy()
     _lwScThread = new int[4]
+    _lwScGen = new int[4]
     _lwScA = new Actor[12]
     _lwScActs = new string[4]
     _lwScScene = new string[4]
@@ -3989,6 +3991,8 @@ function LwRegisterIntimacy()
         i += 1
     endWhile
     _lwScAny = false
+    _lwNoPo3 = false
+    _lwScFallbackAt = -100.0
     RegisterForModEvent("ostim_thread_start", "OnLwOStimStart")
     RegisterForModEvent("ostim_thread_scenechanged", "OnLwOStimScene")
     RegisterForModEvent("ostim_thread_end", "OnLwOStimEnd")
@@ -4090,13 +4094,26 @@ int function LwSceneBegin(int threadId)
     if (slot < 0)
         return -1
     endIf
+    ; Claim the slot before any call out of this script. OStim sends thread_start and the first
+    ; scenechanged together; the call to LivingWorldOStim.Actors lets the other handler run, and
+    ; before this it also found no slot for the thread and began the same scene a second time
+    ; (two witness loops for one scene, seen in the 2026-11-10 log).
+    _lwScThread[slot] = threadId
+    _lwScAny = true   ; LwSceneSlot looks at nothing while this is false
+    _lwScA[slot * 3] = None
+    _lwScA[slot * 3 + 1] = None
+    _lwScA[slot * 3 + 2] = None
     Actor[] actors = LivingWorldOStim.Actors(threadId)
     if (!actors || actors.Length < 2)
+        _lwScThread[slot] = -1
+        _lwScAny = _lwScThread[0] >= 0 || _lwScThread[1] >= 0 || _lwScThread[2] >= 0 || _lwScThread[3] >= 0
         return -1   ; one person alone is not a scene with anyone
     endIf
     int i = 0
     while (i < actors.Length)
         if (actors[i] && actors[i].IsChild())
+            _lwScThread[slot] = -1
+            _lwScAny = _lwScThread[0] >= 0 || _lwScThread[1] >= 0 || _lwScThread[2] >= 0 || _lwScThread[3] >= 0
             return -1   ; children are left out of every Living World system
         endIf
         i += 1
@@ -4117,7 +4134,6 @@ int function LwSceneBegin(int threadId)
         endIf
         i += 1
     endWhile
-    _lwScThread[slot] = threadId
     _lwScActs[slot] = ""
     _lwScScene[slot] = ""
     _lwScStart[slot] = Utility.GetCurrentRealTime()
@@ -4135,7 +4151,8 @@ int function LwSceneBegin(int threadId)
         _lwRightHeld = None
     endIf
     LwBodyLetGo(slot)
-    SendModEvent("LivingWorld_SceneWatch", "", threadId as float)   ; who sees it, all through the scene
+    _lwScGen[slot] = _lwScGen[slot] + 1
+    SendModEvent("LivingWorld_SceneWatch", _lwScGen[slot] as string, threadId as float)   ; who sees it, all through the scene
     return slot
 endFunction
 
@@ -4318,6 +4335,13 @@ endFunction
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 float property LwSceneWatchSeconds = 4.0 auto hidden
+; Without Papyrus Extender's FindAllReferencesWithKeyword the only other way to find people is Mantella's
+; nearby-actor quest (a quest start and stop each time). Doing that every few seconds through a whole scene,
+; on top of OStim and OCum, piled up Papyrus stacks until the game froze for 30 s (2026-11-10, twice).
+; So that scan runs at most this often while a scene is watched.
+float property LwSceneFallbackSeconds = 20.0 auto hidden
+bool _lwNoPo3 = false          ; PeopleNear came back None once: the Extender call is not there, stop asking
+float _lwScFallbackAt = -100.0
 Actor[] _lwScW        ; 4 slots x 8 witnesses
 bool[] _lwScWLos      ; whether they had a line of sight (the best they had)
 float[] _lwScWM       ; how far they were then (m)
@@ -4339,23 +4363,38 @@ endFunction
 
 Event OnLwSceneWatch(string eventName, string strArg, float numArg, Form sender)
     int threadId = numArg as int
+    int gen = strArg as int
     int slot = LwSceneSlot(threadId)
-    while (slot >= 0)
-        LwSceneSample(slot)
+    ; one loop per scene: a loop whose scene ended (or was begun again) stops
+    while (slot >= 0 && _lwScGen && _lwScGen[slot] == gen)
+        LwSceneSample(slot, false)
         Utility.Wait(LwSceneWatchSeconds)
         slot = LwSceneSlot(threadId)
     endWhile
 EndEvent
 
 ; Looks at the adult people around the scene now and keeps the best view each had.
-function LwSceneSample(int slot)
+; once: the scene's start, climax or end (always looks). Otherwise a watch tick, which skips the slow
+; fallback scan unless LwSceneFallbackSeconds have passed.
+function LwSceneSample(int slot, bool once = true)
     Actor doer = _lwScA[slot * 3]
     Actor center = _lwScA[slot * 3 + 1]
     if (!doer || !center || !center.Is3DLoaded())
         return
     endIf
-    Actor[] near = LivingWorldPO3.PeopleNear(center, LivingWorldWitnessScanMeters * 71.0210, _lwActorTypeNPC)
+    Actor[] near
+    if (!_lwNoPo3)
+        near = LivingWorldPO3.PeopleNear(center, LivingWorldWitnessScanMeters * 71.0210, _lwActorTypeNPC)
+        if (!near)
+            _lwNoPo3 = true   ; the scene's own people are always found, so None means the call is missing
+        endIf
+    endIf
     if (!near || near.Length == 0)
+        float now = Utility.GetCurrentRealTime()
+        if (!once && now - _lwScFallbackAt < LwSceneFallbackSeconds)
+            return
+        endIf
+        _lwScFallbackAt = now
         near = ListenerScript.ScanNearbyActors()   ; no Papyrus Extender: Mantella's five nearest to the player
     endIf
     int i = 0
