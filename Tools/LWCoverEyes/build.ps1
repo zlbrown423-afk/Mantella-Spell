@@ -42,7 +42,7 @@ New-Item -ItemType Directory -Force $pex | Out-Null
 Push-Location $env:TEMP
 try {
     # the quest script first: the effect script's property is of its type
-    foreach ($name in 'LWCoverEyes_Quest.psc', 'LWCoverEyes_Effect.psc') {
+    foreach ($name in 'LWCoverEyes_Quest.psc', 'LWCoverEyes_Effect.psc', 'LWCoverEyes_Arousal.psc') {
         & $compiler (Join-Path $src $name) "-f=$vanilla\TESV_Papyrus_Flags.flg" "-i=$imports" "-o=$pex"
         if ($LASTEXITCODE -ne 0) { throw "Papyrus compile failed for $name ($LASTEXITCODE)" }
     }

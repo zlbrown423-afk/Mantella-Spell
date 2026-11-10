@@ -4560,6 +4560,8 @@ function LwRegisterArousalAndEyes()
     RegisterForModEvent("LivingWorld_ArousalLone", "OnLwArousalLone")
     RegisterForModEvent("LivingWorld_ArousalFade", "OnLwArousalFade")
     RegisterForModEvent("LivingWorld_EyesCovered", "OnLwEyesCovered")
+    RegisterForModEvent("LivingWorld_ArousalStep", "OnLwArousalStep") ; the Arousal power (Spell Wheel friendly)
+    _lwArousalKeyBound = 0   ; register the key again on every load: a saved "already bound" must not skip it
     LwSetArousalKey(LwArousalKey)
     _lwErect = -10        ; animation graphs start over on a load
     _lwErectShown = false
@@ -4572,11 +4574,31 @@ function LwSetArousalKey(int keyCode)
         _lwArousalKeyBound = 0
     endIf
     LwArousalKey = keyCode
-    if (keyCode > 0 && _lwArousalKeyBound != keyCode)
-        RegisterForKey(keyCode)
+    if (keyCode > 0)
+        RegisterForKey(keyCode)   ; registering again is harmless
         _lwArousalKeyBound = keyCode
     endIf
 endFunction
+
+; The "Arousal" lesser power (LWCoverEyes.esp), for VR where a keyboard key is awkward. Each cast is one
+; step up: visible (-4), then 2, then fully (9); a cast when already fully up lets it go down.
+Event OnLwArousalStep(string eventName, string strArg, float numArg, Form sender)
+    if (!LivingWorldIntimacyOn || PlayerRef.GetActorBase().GetSex() != 0)
+        return
+    endIf
+    if (_lwErect >= 9)
+        LwSetErect(-10)
+        return
+    elseIf (_lwErect < LwArousalVisibleLevel)
+        LwSetErect(LwArousalVisibleLevel)
+    elseIf (_lwErect < 2)
+        LwSetErect(2)
+    else
+        LwSetErect(9)
+    endIf
+    _lwArousalWatch += 1
+    SendModEvent("LivingWorld_ArousalFade", "", _lwArousalWatch as float)
+EndEvent
 
 function LwArousalTap()
     if (!LivingWorldIntimacyOn || PlayerRef.GetActorBase().GetSex() != 0)
