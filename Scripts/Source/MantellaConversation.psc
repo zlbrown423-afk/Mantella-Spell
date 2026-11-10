@@ -185,6 +185,9 @@ function ContinueConversation(string nextAction, int handle)
         if(SKSE_HTTP.hasKey(handle, "mantella_lw_body_on")) ; LIVINGWORLD PATCH: body language (BL1) on or off
             repository.LivingWorldSetBodyLanguage(SKSE_HTTP.getBool(handle, "mantella_lw_body_on", true))
         endif
+        if(SKSE_HTTP.hasKey(handle, "mantella_lw_intimacy_on")) ; LIVINGWORLD PATCH: intimate scenes (OStim) on or off
+            repository.LivingWorldIntimacyOn = SKSE_HTTP.getBool(handle, "mantella_lw_intimacy_on", true)
+        endif
         repository.LivingWorldWatchWalkAway() ; LIVINGWORLD PATCH: walking away ends the conversation
         ;Debug.Notification("Conversation started.")
         RequestContinueConversation()
@@ -1157,6 +1160,8 @@ int function BuildContext(bool isConversationStart = false)
     SKSE_HTTP.setFloat(_contextHandle, "mantella_lw_rt", Utility.GetCurrentRealTime())
     ; LIVINGWORLD PATCH: what each nearby person wears in the body slot (clothing awareness)
     SKSE_HTTP.setStringArray(_contextHandle, "mantella_lw_attire", repository.LivingWorldAttireSnapshot())
+    ; LIVINGWORLD PATCH: intimate scenes (OStim) running near the player, so the NPCs know what is going on
+    SKSE_HTTP.setStringArray(_contextHandle, "mantella_lw_scene", repository.LwSceneSnapshot())
     if (isConversationStart) ; LIVINGWORLD PATCH: guard careers, the holds the player is thane of (once per conversation)
         SKSE_HTTP.setStringArray(_contextHandle, "mantella_lw_thane_of", repository.LivingWorldThaneOf())
     endIf

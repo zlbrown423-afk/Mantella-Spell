@@ -86,6 +86,14 @@ String lastHitSource = ""
 String lastAggressor = ""
 Int timesHitSameAggressorSource = 0
 Event OnHit(ObjectReference akAggressor, Form akSource, Projectile akProjectile, bool abPowerAttack, bool abSneakAttack, bool abBashAttack, bool abHitBlocked)
+    if (akAggressor == PlayerRef && repository.LwSceneWithPlayer(self.GetActorReference())) ; LIVINGWORLD PATCH: intimate scene
+        repository.LwRecordHit(self.GetActorReference(), akSource, "conversation") ; counted into the scene as a slap
+        string sceneLine = repository.LwSceneHitLine(self.GetActorReference())
+        if (sceneLine != "")
+            AddIngameEventToConversation(sceneLine)
+        endIf
+        return
+    endIf
     if (akAggressor == PlayerRef && !abHitBlocked) ; LIVINGWORLD PATCH: reputation, the player hit this NPC
         string sourceName = ""
         if (akSource)
