@@ -2352,6 +2352,7 @@ function LivingWorldRegisterActions()
     RegisterForModEvent("MantellaConversation_Advanced_Action_mantella_lw_npc_orderdrinks", "OnLwOrderDrinksAdvanced")
     RegisterForModEvent("MantellaConversation_Action_mantella_lw_npc_orderdrinks", "OnLwOrderDrinksBasic")
     RegisterForModEvent("MantellaLivingWorld_OrderOne", "OnLwOrderOneStarted")
+    RegisterForModEvent("LivingWorld_SitSpell", "OnLwSitSpell")   ; LWSitDown.esp's "Sit Down" spell
     LwRegisterUndress()
     RegisterForCrosshairRef()
     if (!_lwOrderActors)
@@ -2568,6 +2569,7 @@ function LwSitOne(Actor npc, string kind)
         seat = LwNearestFurniture(npc, kind)
     endIf
     if (!seat)
+        Debug.Notification(npc.GetDisplayName() + " finds no free " + kind + " nearby.")
         ListenerScript.AddIngameEventToConversation(npc.GetDisplayName() + " looked around but there was no free " + kind + " nearby.")
         return
     endIf
@@ -2653,6 +2655,35 @@ bool function LwPauseFollowerWait(Actor npc)
     endIf
     return false
 endFunction
+
+; ---- "Sit Down" spell (Tools/LWSitDown) ----
+; Cast at an NPC: they sit in the chair, bench or stool the player pointed at in the last
+; LivingWorldPointMemorySeconds, else the nearest free one, and stay seated like a spoken Sit order.
+; Cast at someone already sitting: they stand up. No conversation needed.
+
+Event OnLwSitSpell(Form npcForm)
+    Actor npc = npcForm as Actor
+    if (!npc || npc == PlayerRef || npc.IsDead())
+        return
+    endIf
+    if (npc.IsChild())
+        return   ; children are left out of Living World
+    endIf
+    if (npc.IsInCombat())
+        Debug.Notification(npc.GetDisplayName() + " will not sit down in the middle of a fight.")
+        return
+    endIf
+    if (LwIsSeated(npc))
+        LwStandUp(npc)
+        return
+    endIf
+    ObjectReference pointed = LwPointedRef(true)
+    if (pointed && LwFurnitureFree(pointed) && LwFurnitureMatches(pointed, "seat"))
+        LwSitOne(npc, "pointed")
+    else
+        LwSitOne(npc, "seat")
+    endIf
+EndEvent
 
 ; ---- stand up ----
 
