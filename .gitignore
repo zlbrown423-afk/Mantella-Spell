@@ -7,3 +7,7 @@
 *.pex
 SKSE/Plugins/MantellaSoftware/
 GPT_SECRET_KEY.txt
+# LWHaptics build output; its default ini is tracked
+Tools/LWHaptics/build/
+Tools/LWHaptics/Dist/
+!Tools/LWHaptics/LivingWorldHaptics.ini

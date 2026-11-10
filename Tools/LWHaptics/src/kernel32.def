@@ -1,0 +1,14 @@
+LIBRARY kernel32.dll
+EXPORTS
+GetModuleHandleA
+GetProcAddress
+GetModuleFileNameA
+CreateEventA
+SetEvent
+WaitForSingleObject
+CreateThread
+Sleep
+GetPrivateProfileIntA
+CreateFileA
+WriteFile
+CloseHandle
