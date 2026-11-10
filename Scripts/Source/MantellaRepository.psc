@@ -3976,7 +3976,22 @@ string function LwSceneFields(int slot)
         forced = "1"
     endIf
     rec += "|acts=" + _lwScActs[slot] + "|touch=" + _lwScTouch[slot] + "|slap=" + _lwScSlap[slot] + "|forced=" + forced + "|climax=" + _lwScClimax[slot] + "|dur=" + (Utility.GetCurrentRealTime() - _lwScStart[slot])
+    if (_lwScA[slot * 3] == PlayerRef)
+        float size = LwPlayerGenitalScale()
+        if (size > 0.0)
+            rec += "|psize=" + size
+        endIf
+    endIf
     return rec
+endFunction
+
+; The New Gentleman sizes a man by scaling this one bone (size class x race multiplier, TNG 4.2.7
+; Core::SetActorSize). Reading the bone needs no TNG script. -1 when the player is not a man or has no such bone.
+float function LwPlayerGenitalScale()
+    if (PlayerRef.GetActorBase().GetSex() != 0 || !NetImmerse.HasNode(PlayerRef, "NPC GenitalsBase [GenBase]", false))
+        return -1.0
+    endIf
+    return NetImmerse.GetNodeScale(PlayerRef, "NPC GenitalsBase [GenBase]", false)
 endFunction
 
 ; The scene ended: queue one record and free the slot.
