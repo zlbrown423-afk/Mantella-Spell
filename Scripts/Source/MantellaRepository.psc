@@ -411,6 +411,7 @@ function LivingWorldRegisterPerception()
     LivingWorldRegisterAttireAndDrink()
     LivingWorldRegisterActions()
     LwRegisterReputation() ; LIVINGWORLD PATCH: reputation (S2)
+    LwRegisterIntimacy() ; LIVINGWORLD PATCH: intimate scenes (OStim)
 endFunction
 
 Event OnObjectGrabbed(ObjectReference akRef, bool abIsLeft)
@@ -418,6 +419,9 @@ Event OnObjectGrabbed(ObjectReference akRef, bool abIsLeft)
     ; children are left out of Living World entirely
     if (!LivingWorldPerceptionOn || !target || target == PlayerRef || target.IsDead() || target.IsChild())
         return
+    endIf
+    if (_lwScAny && LwSceneTouch(target))
+        return   ; hands on a partner during an intimate scene are part of the scene (counted there)
     endIf
     ; the same person grabbed again by the same hand without a drop in between: one hold, not two
     if ((abIsLeft && _lwLeftHeld == target) || (!abIsLeft && _lwRightHeld == target))
@@ -548,6 +552,9 @@ function LivingWorldConsumed(Actor consumer, Form item, string via)
 endFunction
 
 function LivingWorldRecordGrab(Actor target, string node, string area, string hand, float seconds)
+    if (_lwScAny && LwSceneWithPlayer(target))
+        return   ; part of an intimate scene, not a grab
+    endIf
     string rec = LivingWorldHeader("grab") + "|actor=" + LivingWorldActorField(PlayerRef) + "|target=" + LivingWorldActorField(target) + "|node=" + node + "|area=" + area + "|hand=" + hand + "|dur=" + seconds + "|trank=" + target.GetRelationshipRank(PlayerRef)
     _lwSawGuard = None
     _lwSawGuardMeters = 1000.0
@@ -585,6 +592,9 @@ function LivingWorldMaybeReact(Actor target, string area, float seconds, bool st
     endIf
     if (ListenerScript.conversation.IsRunning() || _lwPendingTarget)
         return   ; in a conversation the "X grabbed Y" line already lets them react
+    endIf
+    if (_lwScAny && LwSceneWithPlayer(target))
+        return   ; the player's partner in an intimate scene does not pull away from it
     endIf
     bool sensitive = LivingWorldSensitiveArea(area)
     bool isLong = seconds >= LivingWorldReactHoldSeconds
@@ -1658,6 +1668,9 @@ string function LivingWorldAttireRecord(Actor a)
         sex = "f"
     endIf
     string rec = LivingWorldHeader("attire") + "|actor=" + LivingWorldActorField(a) + "|body=" + bodyName + "|cover=" + cover + "|sex=" + sex
+    if (_lwScAny && LwInScene(a) >= 0)
+        rec += "|via=scene"   ; clothes off for an intimate scene: the scene's own record covers it
+    endIf
     if (cover == "none")
         rec += LivingWorldWitnesses(a, None)   ; who could see them: only worked out when it matters
     endIf
@@ -3159,6 +3172,9 @@ function LwRecordHit(Actor victim, Form hitSource, string via)  ; not 'weapon': 
     if (!LivingWorldReputationOn || !LivingWorldPerceptionOn || !victim || victim == PlayerRef || !LivingWorldIsPerson(victim))
         return
     endIf
+    if (_lwScAny && LwSceneSlap(victim))
+        return   ; a slap during an intimate scene is part of the scene (counted there), not an attack
+    endIf
     if (via != "assault" && victim.IsHostileToActor(PlayerRef))
         return   ; fighting an enemy is not news
     endIf
@@ -3461,6 +3477,9 @@ function LwBodyAdd(Actor a, float now)
     if (!a || a == PlayerRef || _lwbActors.Find(a) >= 0 || !a.Is3DLoaded() || !LivingWorldIsPerson(a))
         return
     endIf
+    if (_lwScAny && LwInScene(a) >= 0)
+        return   ; in an intimate scene: OStim moves them, and being close is the point
+    endIf
     if (a.GetDistance(PlayerRef) / 71.0210 > LwBodyWatchMeters)
         return
     endIf
@@ -3653,4 +3672,341 @@ function LwBodyStep(int i, Actor a, float now, bool weaponDrawnNow, bool inTalk)
             _lwbNextGlanceAt[i] = now + 9.0
         endIf
     endIf
+endFunction
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; LIVINGWORLD PATCH: intimate scenes (OStim)                                                         ;
+; OStim's own thread events say when a scene starts, changes and ends (OStim Standalone 7.5.1b,     ;
+; skse/src/GameAPI/GameEvents.cpp: ostim_thread_start/_scenechanged/_end carry the thread id as the ;
+; number; ostim_actor_orgasm comes from the actor; ostim_event carries spanks). Up to 4 scenes are  ;
+; followed at once, with up to 3 people each, the player first when they are in it.                 ;
+; While the player is in a scene with someone, their hands on that partner (HIGGS grabs) and their  ;
+; hits on them are counted into the scene instead of being sent as grabs and hits: no reaction, no ;
+; guard, no "grabbed" or "punched" line. Outside a scene, or on anyone not in the player's scene,   ;
+; nothing changes. When a scene ends, one "scene" record is queued (MantellaExtension               ;
+; livingworld/intimacy); while it runs, each request carries a snapshot (mantella_lw_scene).        ;
+; All OStim calls go through LivingWorldOStim.psc. The server's start reply switches this           ;
+; (mantella_lw_intimacy_on, MANTELLA_LW_INTIMACY).                                                   ;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+bool property LivingWorldIntimacyOn = true auto hidden
+float property LwSceneLineSeconds = 8.0 auto hidden   ; at most one scene line to a conversation this often
+
+int[] _lwScThread          ; 4 slots: the OStim thread id, -1 when free
+Actor[] _lwScA             ; 12: slot * 3 + 0..2, the player first when they are in it
+string[] _lwScActs         ; OStim action types seen so far, comma-separated
+string[] _lwScScene        ; the scene playing now
+float[] _lwScStart
+int[] _lwScTouch
+int[] _lwScSlap
+int[] _lwScClimax
+bool[] _lwScForced
+bool _lwScAny = false      ; any slot in use: keeps the grab and hit handlers free when no scene runs
+float _lwScLineAt = -100.0
+
+; Called from LivingWorldRegisterPerception on every load. OStim does not carry scenes across a load.
+function LwRegisterIntimacy()
+    _lwScThread = new int[4]
+    _lwScA = new Actor[12]
+    _lwScActs = new string[4]
+    _lwScScene = new string[4]
+    _lwScStart = new float[4]
+    _lwScTouch = new int[4]
+    _lwScSlap = new int[4]
+    _lwScClimax = new int[4]
+    _lwScForced = new bool[4]
+    int i = 0
+    while (i < 4)
+        _lwScThread[i] = -1
+        i += 1
+    endWhile
+    _lwScAny = false
+    RegisterForModEvent("ostim_thread_start", "OnLwOStimStart")
+    RegisterForModEvent("ostim_thread_scenechanged", "OnLwOStimScene")
+    RegisterForModEvent("ostim_thread_end", "OnLwOStimEnd")
+    RegisterForModEvent("ostim_actor_orgasm", "OnLwOStimClimax")
+    RegisterForModEvent("ostim_event", "OnLwOStimEvent")
+endFunction
+
+int function LwSceneSlot(int threadId)
+    if (!_lwScAny || !_lwScThread)
+        return -1
+    endIf
+    return _lwScThread.Find(threadId)
+endFunction
+
+; The slot of the scene the actor is in, or -1.
+int function LwInScene(Actor a)
+    if (!_lwScAny || !a)
+        return -1
+    endIf
+    int k = _lwScA.Find(a)
+    if (k < 0)
+        return -1
+    endIf
+    int slot = k / 3
+    if (_lwScThread[slot] < 0)
+        return -1
+    endIf
+    return slot
+endFunction
+
+; True when the player and this person are in the same scene right now.
+bool function LwSceneWithPlayer(Actor a)
+    if (!_lwScAny || !a || a == PlayerRef)
+        return false
+    endIf
+    int slot = LwInScene(a)
+    return slot >= 0 && _lwScA[slot * 3] == PlayerRef
+endFunction
+
+; A HIGGS grab on the player's scene partner: counted into the scene. True when it was.
+bool function LwSceneTouch(Actor target)
+    if (!LwSceneWithPlayer(target))
+        return false
+    endIf
+    int slot = LwInScene(target)
+    _lwScTouch[slot] = _lwScTouch[slot] + 1
+    return true
+endFunction
+
+; A hit on the player's scene partner: counted as a slap. True when it was.
+bool function LwSceneSlap(Actor target)
+    if (!LwSceneWithPlayer(target))
+        return false
+    endIf
+    int slot = LwInScene(target)
+    _lwScSlap[slot] = _lwScSlap[slot] + 1
+    return true
+endFunction
+
+; The conversation line for a slap during a scene (MantellaTargetListenerScript.OnHit), or "" this soon after another.
+string function LwSceneHitLine(Actor target)
+    float now = Utility.GetCurrentRealTime()
+    if (now - _lwScLineAt < LwSceneLineSeconds)
+        return ""
+    endIf
+    _lwScLineAt = now
+    return PlayerRef.GetDisplayName() + " slaps " + target.GetDisplayName() + " as part of their intimate scene, not as an attack."
+endFunction
+
+function LwSceneSay(int slot, string text, bool always)
+    if (_lwScA[slot * 3] != PlayerRef && !ListenerScript.conversation.IsRunning())
+        return
+    endIf
+    float now = Utility.GetCurrentRealTime()
+    if (!always && now - _lwScLineAt < LwSceneLineSeconds)
+        return
+    endIf
+    _lwScLineAt = now
+    ListenerScript.AddIngameEventToConversation(text)
+endFunction
+
+string function LwSceneNames(int slot)
+    string names = _lwScA[slot * 3].GetDisplayName()
+    if (_lwScA[slot * 3 + 2])
+        names += ", " + _lwScA[slot * 3 + 1].GetDisplayName() + " and " + _lwScA[slot * 3 + 2].GetDisplayName()
+    elseIf (_lwScA[slot * 3 + 1])
+        names += " and " + _lwScA[slot * 3 + 1].GetDisplayName()
+    endIf
+    return names
+endFunction
+
+; Starts following a thread. Returns its slot, or -1 (no room, fewer than two people, or a child).
+int function LwSceneBegin(int threadId)
+    int slot = _lwScThread.Find(-1)
+    if (slot < 0)
+        return -1
+    endIf
+    Actor[] actors = LivingWorldOStim.Actors(threadId)
+    if (!actors || actors.Length < 2)
+        return -1   ; one person alone is not a scene with anyone
+    endIf
+    int i = 0
+    while (i < actors.Length)
+        if (actors[i] && actors[i].IsChild())
+            return -1   ; children are left out of every Living World system
+        endIf
+        i += 1
+    endWhile
+    _lwScA[slot * 3] = None
+    _lwScA[slot * 3 + 1] = None
+    _lwScA[slot * 3 + 2] = None
+    int n = 0
+    if (actors.Find(PlayerRef) >= 0)
+        _lwScA[slot * 3] = PlayerRef
+        n = 1
+    endIf
+    i = 0
+    while (i < actors.Length && n < 3)
+        if (actors[i] && actors[i] != PlayerRef)
+            _lwScA[slot * 3 + n] = actors[i]
+            n += 1
+        endIf
+        i += 1
+    endWhile
+    _lwScThread[slot] = threadId
+    _lwScActs[slot] = ""
+    _lwScScene[slot] = ""
+    _lwScStart[slot] = Utility.GetCurrentRealTime()
+    _lwScTouch[slot] = 0
+    _lwScSlap[slot] = 0
+    _lwScClimax[slot] = 0
+    _lwScForced[slot] = false
+    _lwScAny = true
+    ; a hand already holding a partner when the scene starts: that hold belongs to the scene now
+    if (_lwLeftHeld && LwInScene(_lwLeftHeld) == slot && _lwScA[slot * 3] == PlayerRef)
+        _lwLeftHeld = None
+    endIf
+    if (_lwRightHeld && LwInScene(_lwRightHeld) == slot && _lwScA[slot * 3] == PlayerRef)
+        _lwRightHeld = None
+    endIf
+    LwBodyLetGo(slot)
+    return slot
+endFunction
+
+; Body language lets go of everyone in the scene (no stepping back from a partner, no folded arms).
+function LwBodyLetGo(int slot)
+    if (!_lwbActors)
+        return
+    endIf
+    int k = 0
+    while (k < 3)
+        Actor a = _lwScA[slot * 3 + k]
+        if (a)
+            int i = _lwbActors.Find(a)
+            if (i >= 0)
+                LwBodyRelease(i)
+            endIf
+        endIf
+        k += 1
+    endWhile
+endFunction
+
+; Adds the scene's action types to what the slot has seen; returns the new ones, comma-separated.
+string function LwSceneNoteActs(int slot, string sceneId)
+    if (sceneId == "")
+        return ""
+    endIf
+    _lwScScene[slot] = sceneId
+    if (LivingWorldOStim.Aggressive(sceneId))
+        _lwScForced[slot] = true
+    endIf
+    string[] types = LivingWorldOStim.ActionTypes(sceneId)
+    string added = ""
+    int i = 0
+    while (i < types.Length)
+        string t = types[i]
+        if (t != "" && StringUtil.Find("," + _lwScActs[slot] + ",", "," + t + ",") < 0)
+            if (_lwScActs[slot] == "")
+                _lwScActs[slot] = t
+            else
+                _lwScActs[slot] = _lwScActs[slot] + "," + t
+            endIf
+            if (added == "")
+                added = t
+            else
+                added += ", " + t
+            endIf
+        endIf
+        i += 1
+    endWhile
+    return added
+endFunction
+
+Event OnLwOStimStart(string eventName, string strArg, float numArg, Form sender)
+    if (!LivingWorldIntimacyOn || !LivingWorldPerceptionOn || LwSceneSlot(numArg as int) >= 0)
+        return
+    endIf
+    int slot = LwSceneBegin(numArg as int)
+    if (slot >= 0)
+        LwSceneNoteActs(slot, LivingWorldOStim.Scene(numArg as int))
+        LwSceneSay(slot, LwSceneNames(slot) + " begin an intimate scene together.", true)
+        Debug.Trace("Mantella Living World: following OStim thread " + (numArg as int) + " (" + LwSceneNames(slot) + ")")
+    endIf
+EndEvent
+
+Event OnLwOStimScene(string eventName, string sceneId, float numArg, Form sender)
+    if (!LivingWorldIntimacyOn || !LivingWorldPerceptionOn)
+        return
+    endIf
+    int threadId = numArg as int
+    int slot = LwSceneSlot(threadId)
+    if (slot < 0)
+        slot = LwSceneBegin(threadId)   ; started before this load, or the start event was missed
+        if (slot < 0)
+            return
+        endIf
+    endIf
+    string added = LwSceneNoteActs(slot, sceneId)
+    if (added != "")
+        LwSceneSay(slot, "In their intimate scene, " + LwSceneNames(slot) + " are now: " + added + ".", false)
+    endIf
+EndEvent
+
+Event OnLwOStimClimax(string eventName, string sceneId, float numArg, Form sender)
+    int slot = LwSceneSlot(numArg as int)
+    if (slot >= 0)
+        _lwScClimax[slot] = _lwScClimax[slot] + 1
+    endIf
+EndEvent
+
+Event OnLwOStimEvent(int threadId, string eventType, Form eventActor, Form eventTarget, Form eventPerformer)
+    int slot = LwSceneSlot(threadId)
+    if (slot >= 0 && LivingWorldOStim.IsSpank(eventType))
+        _lwScSlap[slot] = _lwScSlap[slot] + 1
+    endIf
+EndEvent
+
+Event OnLwOStimEnd(string eventName, string strArg, float numArg, Form sender)
+    int slot = LwSceneSlot(numArg as int)
+    if (slot >= 0)
+        LwSceneFlush(slot)
+    endIf
+EndEvent
+
+; The scene's people, acts and counts as record fields (shared by the end record and the snapshot).
+string function LwSceneFields(int slot)
+    string rec = "|thread=" + _lwScThread[slot] + "|scene=" + _lwScScene[slot] + "|actor=" + LivingWorldActorField(_lwScA[slot * 3]) + "|target=" + LivingWorldActorField(_lwScA[slot * 3 + 1])
+    if (_lwScA[slot * 3 + 2])
+        rec += "|party=" + LivingWorldActorField(_lwScA[slot * 3 + 2])
+    endIf
+    string forced = "0"
+    if (_lwScForced[slot])
+        forced = "1"
+    endIf
+    rec += "|acts=" + _lwScActs[slot] + "|touch=" + _lwScTouch[slot] + "|slap=" + _lwScSlap[slot] + "|forced=" + forced + "|climax=" + _lwScClimax[slot] + "|dur=" + (Utility.GetCurrentRealTime() - _lwScStart[slot])
+    return rec
+endFunction
+
+; The scene ended: queue one record and free the slot.
+function LwSceneFlush(int slot)
+    string names = LwSceneNames(slot)
+    string rec = LivingWorldHeader("scene") + "|via=end" + LwSceneFields(slot)
+    rec += LivingWorldWitnesses(_lwScA[slot * 3], _lwScA[slot * 3 + 1])
+    LivingWorldQueue(rec)
+    LwSceneSay(slot, "The intimate scene between " + names + " has ended.", true)
+    _lwScThread[slot] = -1
+    _lwScA[slot * 3] = None
+    _lwScA[slot * 3 + 1] = None
+    _lwScA[slot * 3 + 2] = None
+    _lwScAny = _lwScThread[0] >= 0 || _lwScThread[1] >= 0 || _lwScThread[2] >= 0 || _lwScThread[3] >= 0
+endFunction
+
+; MantellaConversation.BuildContext sends this with every request: one record per scene running near the player.
+string[] function LwSceneSnapshot()
+    string[] result = Utility.CreateStringArray(0)
+    if (!_lwScAny || !LivingWorldIntimacyOn)
+        return result
+    endIf
+    int slot = 0
+    while (slot < 4)
+        Actor a = _lwScA[slot * 3]
+        if (_lwScThread[slot] >= 0 && a && a.GetDistance(PlayerRef) / 71.0210 <= LivingWorldWitnessScanMeters)
+            result = Utility.ResizeStringArray(result, result.Length + 1)
+            result[result.Length - 1] = LivingWorldHeader("scene") + "|via=now" + LwSceneFields(slot) + LivingWorldWitnesses(a, _lwScA[slot * 3 + 1])
+        endIf
+        slot += 1
+    endWhile
+    return result
 endFunction
