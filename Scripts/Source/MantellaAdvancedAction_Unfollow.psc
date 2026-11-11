@@ -40,5 +40,6 @@ Function NpcUnfollow(Actor speaker)
         Debug.Notification(speaker.GetDisplayName() + " stops following you.")
         speaker.SetActorValue("WaitingForPlayer", 0)
         MantellaFollowerUtils.DismissFollower(speaker, repository.gia_FollowerQst, repository.giafac_following)
+        repository.LwSurrenderUnfollowed(speaker)   ; LIVINGWORLD PATCH: a survivor goes home
     endif
 EndFunction

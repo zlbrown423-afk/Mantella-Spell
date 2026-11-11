@@ -87,6 +87,7 @@ event OnNpcFollowActionReceived(Form speaker)
             participant.SetFactionRank(repository.giafac_following, 1)
             participant.SetActorValue("WaitingForPlayer", 0)
             anyNewFollowers = true
+            repository.LwSurrenderFollowed(participant)   ; LIVINGWORLD PATCH: a survivor sent home comes along again
         endif
         i += 1
     EndWhile
@@ -111,6 +112,7 @@ endEvent
 
 Function NpcFollow(Actor aSpeaker)
     if (aSpeaker)
+        repository.LwSurrenderFollowed(aSpeaker)   ; LIVINGWORLD PATCH
         if (aSpeaker.getrelationshiprank(PlayerRef) != 4)
             Debug.Notification(aSpeaker.GetDisplayName() + " is following you.");gia
             aSpeaker.SetFactionRank(repository.giafac_following, 1);gia

@@ -205,6 +205,9 @@ function ContinueConversation(string nextAction, int handle)
         if(SKSE_HTTP.hasKey(handle, "mantella_lw_decency_on")) ; LIVINGWORLD PATCH: guards and a naked player (MANTELLA_LW_DECENCY)
             repository.LwDecencyOn = SKSE_HTTP.getBool(handle, "mantella_lw_decency_on", true)
         endIf
+        if(SKSE_HTTP.hasKey(handle, "mantella_lw_surrender_on")) ; LIVINGWORLD PATCH: a survivor begs to be spared (MANTELLA_LW_SURRENDER)
+            repository.LwSurrenderOn = SKSE_HTTP.getBool(handle, "mantella_lw_surrender_on", true)
+        endIf
         if(SKSE_HTTP.hasKey(handle, "mantella_lw_peek_on")) ; LIVINGWORLD PATCH: women's glances at a naked player (MANTELLA_LW_PEEK)
             repository.LwPeekOn = SKSE_HTTP.getBool(handle, "mantella_lw_peek_on", true)
         endIf

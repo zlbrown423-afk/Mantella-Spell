@@ -5059,6 +5059,7 @@ function LwRegisterConfrontAndDecency()
     LwDecencyCooldown = 120.0
     RegisterForModEvent("LivingWorld_Confront", "OnLwConfront")
     RegisterForModEvent("LivingWorld_Decency", "OnLwDecency")
+    RegisterForModEvent("LivingWorld_Surrender", "OnLwSurrender")   ; LIVINGWORLD PATCH: the LWSaloniaSurrender plugin
 endFunction
 
 ; The name the server knows someone by (the player by their own name).
@@ -5861,5 +5862,115 @@ function LwGestureCost(float t0)
         if (LivingWorldGestureNotices)
             Debug.Notification("Gestures switched off: too slow on this game")
         endIf
+    endIf
+endFunction
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; LIVINGWORLD PATCH: surrender                                                                       ;
+; The LWSaloniaSurrender plugin watches the Carvain party (Dark Brotherhood wedding guests) and sends ;
+; LivingWorld_Surrender (survivor, husband, bodyguard or None, killed by the player) once the husband ;
+; and the bodyguard are dead. Here the survivor stops fighting or fleeing, comes to the player, a     ;
+; react record (via=surrender, MantellaExtension social/surrender.py) is queued and a conversation    ;
+; starts: she begs to be spared and offers to come along (Mantella's Follow). After that she is a     ;
+; survivor: Unfollow sends her home (LivingWorld_SurrenderHome: the plugin walks her to the player's  ;
+; house, else the Bannered Mare) and Follow again calls her back (LivingWorld_SurrenderFollow).        ;
+; The server's start reply switches it (mantella_lw_surrender_on, MANTELLA_LW_SURRENDER).             ;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+bool property LwSurrenderOn = true auto hidden
+Actor[] _lwSurvivors   ; everyone who surrendered to the player (kept in the save)
+
+Event OnLwSurrender(Form survivorForm, Form husbandForm, Form guardForm, bool playerKilled)
+    Actor s = survivorForm as Actor
+    Actor husband = husbandForm as Actor
+    Actor guard = guardForm as Actor
+    if (!LwSurrenderOn || !s || !husband || s.IsDead() || LwIsSurvivor(s))
+        return
+    endIf
+    LwAddSurvivor(s)
+    s.StopCombat()
+    s.StopCombatAlarm()
+    s.EvaluatePackage()
+    string who = LwRealName(s)
+    string lost = LwRealName(husband)
+    if (guard)
+        lost += " and " + LwRealName(guard)
+    endIf
+    Debug.Trace("Mantella Living World: " + who + " surrenders (" + lost + " dead, player killed: " + playerKilled + ")")
+    Debug.Notification(s.GetDisplayName() + " drops to her knees and comes to you.")
+    if (s.GetDistance(PlayerRef) / 71.0210 > 3.0)
+        s.PathToReference(PlayerRef, 0.6)   ; latent on this event's own stack: a hurried walk, then face to face
+    endIf
+    if (s.IsDead())
+        return
+    endIf
+    string killer = "other"
+    if (playerKilled)
+        killer = "player"
+    endIf
+    string rec = LivingWorldHeader("react") + "|actor=" + LivingWorldActorField(s) + "|target=" + LivingWorldActorField(PlayerRef) + "|via=surrender|party=" + LivingWorldActorField(husband)
+    if (guard)
+        rec += "|d=" + LivingWorldActorField(guard)
+    endIf
+    LivingWorldQueue(rec + "|killer=" + killer)
+    string ev
+    if (playerKilled)
+        ev = PlayerRef.GetDisplayName() + " has just killed " + lost + ". " + who + ", left alone, does not fight or run: she comes to " + PlayerRef.GetDisplayName() + " and begs to be spared."
+    else
+        ev = lost + " lie dead. " + who + ", left alone and helpless, comes to " + PlayerRef.GetDisplayName() + " and begs for help."
+    endIf
+    MantellaConversation conv = ListenerScript.conversation
+    if (conv.IsRunning())
+        if (!conv.Participants.HasForm(s))
+            Actor[] add = new Actor[1]
+            add[0] = s
+            conv.AddActorsToConversation(add)
+        endIf
+        conv.AddIngameEvent(ev)
+        return
+    endIf
+    Actor[] actors = new Actor[2]
+    actors[0] = PlayerRef
+    actors[1] = s
+    conv.Start()
+    conv.AddIngameEvent(ev)
+    conv.StartConversation(actors)
+    s.EvaluatePackage()
+EndEvent
+
+bool function LwIsSurvivor(Actor a)
+    return a && _lwSurvivors && _lwSurvivors.Find(a) >= 0
+endFunction
+
+function LwAddSurvivor(Actor a)
+    if (!_lwSurvivors)
+        _lwSurvivors = new Actor[8]
+    endIf
+    int i = _lwSurvivors.Find(None)
+    if (i < 0)
+        i = 0   ; full: the oldest slot goes
+    endIf
+    _lwSurvivors[i] = a
+endFunction
+
+; From Mantella's Unfollow: a survivor goes home instead of standing where she was left.
+function LwSurrenderUnfollowed(Actor a)
+    if (LwSurrenderOn && LwIsSurvivor(a) && !a.IsDead())
+        LwSurrenderSend("LivingWorld_SurrenderHome", a)
+    endIf
+endFunction
+
+; From Mantella's Follow: a survivor sent home comes along again.
+function LwSurrenderFollowed(Actor a)
+    if (LwSurrenderOn && LwIsSurvivor(a) && !a.IsDead())
+        LwSurrenderSend("LivingWorld_SurrenderFollow", a)
+    endIf
+endFunction
+
+function LwSurrenderSend(string eventName, Actor a)
+    int h = ModEvent.Create(eventName)
+    if (h)
+        ModEvent.PushForm(h, a)
+        ModEvent.Send(h)
     endIf
 endFunction
