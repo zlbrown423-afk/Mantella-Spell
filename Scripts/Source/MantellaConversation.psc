@@ -208,6 +208,9 @@ function ContinueConversation(string nextAction, int handle)
         if(SKSE_HTTP.hasKey(handle, "mantella_lw_surrender_on")) ; LIVINGWORLD PATCH: a survivor begs to be spared (MANTELLA_LW_SURRENDER)
             repository.LwSurrenderOn = SKSE_HTTP.getBool(handle, "mantella_lw_surrender_on", true)
         endIf
+        if(SKSE_HTTP.hasKey(handle, "mantella_lw_side_jobs_on")) ; LIVINGWORLD PATCH: side jobs in Whiterun (MANTELLA_LW_SALONIA_JOBS)
+            repository.LwSideJobsOn = SKSE_HTTP.getBool(handle, "mantella_lw_side_jobs_on", true)
+        endIf
         if(SKSE_HTTP.hasKey(handle, "mantella_lw_peek_on")) ; LIVINGWORLD PATCH: women's glances at a naked player (MANTELLA_LW_PEEK)
             repository.LwPeekOn = SKSE_HTTP.getBool(handle, "mantella_lw_peek_on", true)
         endIf
@@ -410,6 +413,9 @@ function ProcessNpcSpeak(int handle)
         if (lwArrested)
             repository.LivingWorldArrest(lwArrested, SKSE_HTTP.getString(handle, "mantella_lw_guard_arrest_mode", "submit"), SKSE_HTTP.getInt(handle, "mantella_lw_guard_arrest_id"), SKSE_HTTP.getFloat(handle, "mantella_lw_guard_arrest_days", 1.0), SKSE_HTTP.getInt(handle, "mantella_lw_guard_jail_id", 0), SKSE_HTTP.getString(handle, "mantella_lw_guard_jail_plugin", "Skyrim.esm"))
         endIf
+    endif
+    if(SKSE_HTTP.hasKey(handle, "mantella_lw_side_job_do")) ; LIVINGWORLD PATCH: side jobs, goods and coin into her pack (no crime gold)
+        repository.LwSideJobs(SKSE_HTTP.getStringArray(handle, "mantella_lw_side_job_do"))
     endif
     if(SKSE_HTTP.hasKey(handle, "mantella_lw_guard_release")) ; LIVINGWORLD PATCH: guard careers G2f, prisoners let out
         repository.LivingWorldRelease(SKSE_HTTP.getIntArray(handle, "mantella_lw_guard_release"))
