@@ -5880,15 +5880,27 @@ endFunction
 
 bool property LwSurrenderOn = true auto hidden
 Actor[] _lwSurvivors   ; everyone who surrendered to the player (kept in the save)
+Actor _lwSurrenderLast   ; the last surrender handled, and its game time: a repeated event is ignored
+float _lwSurrenderLastAt = -1.0
 
 Event OnLwSurrender(Form survivorForm, Form husbandForm, Form guardForm, bool playerKilled)
     Actor s = survivorForm as Actor
     Actor husband = husbandForm as Actor
     Actor guard = guardForm as Actor
-    if (!LwSurrenderOn || !s || !husband || s.IsDead() || LwIsSurvivor(s))
+    if (!LwSurrenderOn || !s || !husband || s.IsDead())
         return
     endIf
-    LwAddSurvivor(s)
+    ; The same surrender twice (a repeated event) is ignored; a survivor surrendering again after a reload, or
+    ; long after, still gets her opening conversation (2026-11-11: a reloaded mid-fight save skipped it).
+    float gameNow = Utility.GetCurrentGameTime()
+    if (s == _lwSurrenderLast && gameNow >= _lwSurrenderLastAt && gameNow - _lwSurrenderLastAt < 0.01)
+        return
+    endIf
+    _lwSurrenderLast = s
+    _lwSurrenderLastAt = gameNow
+    if (!LwIsSurvivor(s))
+        LwAddSurvivor(s)
+    endIf
     s.StopCombat()
     s.StopCombatAlarm()
     s.EvaluatePackage()
@@ -5899,12 +5911,8 @@ Event OnLwSurrender(Form survivorForm, Form husbandForm, Form guardForm, bool pl
     endIf
     Debug.Trace("Mantella Living World: " + who + " surrenders (" + lost + " dead, player killed: " + playerKilled + ")")
     Debug.Notification(s.GetDisplayName() + " drops to her knees and comes to you.")
-    if (s.GetDistance(PlayerRef) / 71.0210 > 3.0)
-        s.PathToReference(PlayerRef, 0.6)   ; latent on this event's own stack: a hurried walk, then face to face
-    endIf
-    if (s.IsDead())
-        return
-    endIf
+    ; No latent PathToReference here: mid-fight it never returned, so nothing after it ran (2026-11-11). The
+    ; record and the conversation go first; Mantella's approach walks her over.
     string killer = "other"
     if (playerKilled)
         killer = "player"
@@ -5936,6 +5944,9 @@ Event OnLwSurrender(Form survivorForm, Form husbandForm, Form guardForm, bool pl
     conv.Start()
     conv.AddIngameEvent(ev)
     conv.StartConversation(actors)
+    if (s.GetDistance(PlayerRef) / 71.0210 > 3.0)
+        conv.TriggerApproachMoveAction(s)
+    endIf
     s.EvaluatePackage()
 EndEvent
 
