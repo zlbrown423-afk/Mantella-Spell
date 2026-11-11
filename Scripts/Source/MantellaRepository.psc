@@ -2327,6 +2327,205 @@ Event OnLwDrinkFetch(Form npcForm, Form bottleForm)
 EndEvent
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; LIVINGWORLD PATCH: Trade (an agreed deal)                                                          ;
+; Barter only opens for merchants (Skyrim ignores ShowBarterMenu on a guard) and Inventory only      ;
+; opens a window. Trade carries out the deal the player and the NPC agreed: the server names what    ;
+; each side hands over (livingworld/actions/trade.py) and this checks both sides have it, then moves ;
+; it all at once. Items are found by name (any spelling in *_gives_match, '|'-separated).           ;
+; An NPC short of gold pays the rest "from their savings" (added), so a deal with a guard who        ;
+; carries little coin still works. The player's side is never conjured: no goods, no deal.          ;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+function LwRegisterTrade()
+    RegisterForModEvent("MantellaConversation_Advanced_Action_mantella_lw_npc_trade", "OnLwTradeAdvanced")
+    RegisterForModEvent("MantellaConversation_Action_mantella_lw_npc_trade", "OnLwTradeBasic")
+endFunction
+
+Event OnLwTradeAdvanced(Form speaker, Form conversationQuest, int argumentsHandle)
+    MantellaConversation conv = conversationQuest as MantellaConversation
+    Actor npc = None
+    if (conv)
+        npc = conv.GetActorByName(SKSE_HTTP.getString(argumentsHandle, "source", ""))
+    endIf
+    if (!npc)
+        npc = speaker as Actor
+    endIf
+    LwTrade(npc, SKSE_HTTP.getString(argumentsHandle, "player_gives_match", ""), SKSE_HTTP.getInt(argumentsHandle, "player_gives_count", 0), SKSE_HTTP.getInt(argumentsHandle, "player_gives_gold", 0), SKSE_HTTP.getString(argumentsHandle, "npc_gives_match", ""), SKSE_HTTP.getInt(argumentsHandle, "npc_gives_count", 0), SKSE_HTTP.getInt(argumentsHandle, "npc_gives_gold", 0))
+EndEvent
+
+; "Trade:" with no details (basic actions): nothing says what the deal is, so open the NPC's pack instead.
+Event OnLwTradeBasic(Form speaker)
+    Actor npc = speaker as Actor
+    if (npc && npc != PlayerRef && LivingWorldIsPerson(npc))
+        npc.OpenInventory(true)
+        ListenerScript.AddIngameEventToConversation(npc.GetDisplayName() + " opened their pack so the two of them could swap goods by hand.")
+    endIf
+EndEvent
+
+; The item in who's inventory whose name is, or else contains, one of the '|'-separated spellings,
+; preferring one they hold at least `count` of ("Amethyst" before "Flawless Amethyst").
+Form function LwTradeFindItem(Actor who, string terms, int count)
+    if (!who || terms == "")
+        return None
+    endIf
+    Form gold = Game.GetFormFromFile(0x0000000F, "Skyrim.esm")
+    Form best = None
+    int bestScore = 0
+    int n = who.GetNumItems()
+    int i = 0
+    while (i < n)
+        Form f = who.GetNthForm(i)
+        if (f && f != gold)
+            int score = LwTradeNameMatches(f.GetName(), terms)   ; 2 = same name, 1 = name contains it
+            if (score > 0)
+                if (who.GetItemCount(f) >= count)
+                    score += 2
+                endIf
+                if (score > bestScore)
+                    best = f
+                    bestScore = score
+                endIf
+            endIf
+        endIf
+        i += 1
+    endWhile
+    return best
+endFunction
+
+int function LwTradeNameMatches(string itemName, string terms)
+    if (itemName == "")
+        return 0
+    endIf
+    int found = 0
+    int start = 0
+    int len = StringUtil.GetLength(terms)
+    while (start < len)
+        int bar = StringUtil.Find(terms, "|", start)
+        if (bar < 0)
+            bar = len
+        endIf
+        string term = StringUtil.Substring(terms, start, bar - start)
+        if (term != "")
+            if (itemName == term)
+                return 2
+            elseIf (StringUtil.Find(itemName, term) >= 0)
+                found = 1
+            endIf
+        endIf
+        start = bar + 1
+    endWhile
+    return found
+endFunction
+
+string function LwTradeFirstTerm(string terms)
+    int bar = StringUtil.Find(terms, "|")
+    if (bar < 0)
+        return terms
+    endIf
+    return StringUtil.Substring(terms, 0, bar)
+endFunction
+
+function LwTrade(Actor npc, string playerMatch, int playerCount, int playerGold, string npcMatch, int npcCount, int npcGold)
+    if (!npc || npc == PlayerRef || !LivingWorldIsPerson(npc) || npc.IsDead())
+        return
+    endIf
+    string npcName = LivingWorldFog.RealName(npc)
+    string playerName = PlayerRef.GetDisplayName()
+    if (playerCount < 1)
+        playerCount = 1
+    endIf
+    if (npcCount < 1)
+        npcCount = 1
+    endIf
+    if (playerGold < 0)
+        playerGold = 0
+    endIf
+    if (npcGold < 0)
+        npcGold = 0
+    endIf
+    if (playerMatch == "" && npcMatch == "" && playerGold == 0 && npcGold == 0)
+        npc.OpenInventory(true)
+        ListenerScript.AddIngameEventToConversation(npcName + " opened their pack so the two of them could swap goods by hand (the deal did not say what changes hands).")
+        return
+    endIf
+    Form gold = Game.GetFormFromFile(0x0000000F, "Skyrim.esm")   ; Gold001
+
+    ; Check everything first: nothing moves unless the whole deal can.
+    Form playerItem = None
+    if (playerMatch != "")
+        playerItem = LwTradeFindItem(PlayerRef, playerMatch, playerCount)
+        if (!playerItem)
+            ListenerScript.AddIngameEventToConversation("The trade did not happen: " + playerName + " has no " + LwTradeFirstTerm(playerMatch) + " to hand over.")
+            Debug.Notification("Trade: you have no " + LwTradeFirstTerm(playerMatch))
+            return
+        endIf
+        if (PlayerRef.GetItemCount(playerItem) < playerCount)
+            ListenerScript.AddIngameEventToConversation("The trade did not happen: " + playerName + " has only " + PlayerRef.GetItemCount(playerItem) + " " + playerItem.GetName() + ", not " + playerCount + ".")
+            Debug.Notification("Trade: you have only " + PlayerRef.GetItemCount(playerItem) + " " + playerItem.GetName())
+            return
+        endIf
+    endIf
+    if (playerGold > 0 && PlayerRef.GetItemCount(gold) < playerGold)
+        ListenerScript.AddIngameEventToConversation("The trade did not happen: " + playerName + " does not have the " + playerGold + " gold.")
+        Debug.Notification("Trade: you don't have " + playerGold + " gold")
+        return
+    endIf
+    Form npcItem = None
+    if (npcMatch != "")
+        npcItem = LwTradeFindItem(npc, npcMatch, npcCount)
+        if (!npcItem || npc.GetItemCount(npcItem) < npcCount)
+            ListenerScript.AddIngameEventToConversation("The trade did not happen: " + npcName + " does not have " + npcCount + " " + LwTradeFirstTerm(npcMatch) + " on them.")
+            Debug.Notification("Trade: " + npcName + " doesn't have the " + LwTradeFirstTerm(npcMatch))
+            return
+        endIf
+    endIf
+
+    ; Swap. Not silent, so the player sees what came and went.
+    string gave = ""
+    string got = ""
+    if (playerItem)
+        PlayerRef.RemoveItem(playerItem, playerCount, false, npc)
+        gave = playerCount + " " + playerItem.GetName()
+    endIf
+    if (playerGold > 0)
+        PlayerRef.RemoveItem(gold, playerGold, false, npc)
+        gave = LwTradeJoin(gave, playerGold + " gold")
+    endIf
+    if (npcItem)
+        npc.RemoveItem(npcItem, npcCount, false, PlayerRef)
+        got = npcCount + " " + npcItem.GetName()
+    endIf
+    if (npcGold > 0)
+        int purse = npc.GetItemCount(gold)
+        if (purse >= npcGold)
+            npc.RemoveItem(gold, npcGold, false, PlayerRef)
+        else
+            if (purse > 0)
+                npc.RemoveItem(gold, purse, true, PlayerRef)
+            endIf
+            PlayerRef.AddItem(gold, npcGold - purse, true)
+            Debug.Notification(npcGold + " Gold added")
+        endIf
+        got = LwTradeJoin(got, npcGold + " gold")
+    endIf
+    if (gave == "")
+        gave = "nothing"
+    endIf
+    if (got == "")
+        got = "nothing"
+    endIf
+    ListenerScript.AddIngameEventToConversation("Trade done: " + playerName + " handed " + npcName + " " + gave + ", and " + npcName + " handed over " + got + ".")
+    Debug.Trace("Mantella Living World: trade with " + npcName + ": player gave " + gave + ", got " + got)
+endFunction
+
+string function LwTradeJoin(string a, string b)
+    if (a == "")
+        return b
+    endIf
+    return a + " and " + b
+endFunction
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; LIVINGWORLD PATCH: actions (sit, stand up, go there)                                              ;
 ; The Living World server offers these to the LLM only when MANTELLA_LIVING_WORLD=1 (see             ;
 ; livingworld/actions/ in MantellaExtension), so without it these handlers never fire.               ;
@@ -2367,6 +2566,7 @@ function LivingWorldRegisterActions()
     RegisterForModEvent("MantellaLivingWorld_OrderOne", "OnLwOrderOneStarted")
     RegisterForModEvent("LivingWorld_SitSpell", "OnLwSitSpell")   ; LWSitDown.esp's "Sit Down" spell
     LwRegisterUndress()
+    LwRegisterTrade()
     RegisterForCrosshairRef()
     if (!_lwOrderActors)
         _lwOrderActors = new Actor[16]

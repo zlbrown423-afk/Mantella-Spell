@@ -27,8 +27,17 @@ endEvent
 
 
 Function NpcBarter(Actor source)
-    if source
+    if (source)
         source.ShowBarterMenu()
-        EventInterface.AddMantellaEvent(LivingWorldFog.RealName(source) + "'s barter menu opened.")
+        ; LIVINGWORLD PATCH: only merchants have a barter menu. Skyrim ignores ShowBarterMenu on anyone
+        ; else (a guard, a farmer), so the player saw nothing while the NPC was told it opened. Open their
+        ; pack instead, and say so, so a deal can still be done by hand (or with the Trade action).
+        Utility.WaitMenuMode(0.5)
+        if (UI.IsMenuOpen("BarterMenu"))
+            EventInterface.AddMantellaEvent(LivingWorldFog.RealName(source) + "'s barter menu opened.")
+        else
+            source.OpenInventory(true)
+            EventInterface.AddMantellaEvent(LivingWorldFog.RealName(source) + " is not a merchant and has no barter menu, so they opened their pack instead for the two of them to swap goods by hand.")
+        endIf
     endif
 EndFunction
