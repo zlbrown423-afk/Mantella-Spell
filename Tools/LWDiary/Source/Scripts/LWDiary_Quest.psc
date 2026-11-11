@@ -99,12 +99,12 @@ Event OnDiaryKeeper(Form keeperForm, Int npcId, String title, String world, Int 
 EndEvent
 
 ObjectReference Function NewDiary(Actor keeper, String title)
-	ObjectReference book = keeper.PlaceAtMe(DiaryBook, 1, True, False)
-	If book
-		book.SetDisplayName(title, True)
-		keeper.AddItem(book, 1, True)
+	ObjectReference diaryRef = keeper.PlaceAtMe(DiaryBook, 1, True, False)
+	If diaryRef
+		diaryRef.SetDisplayName(title, True)
+		keeper.AddItem(diaryRef, 1, True)
 	EndIf
-	Return book
+	Return diaryRef
 EndFunction
 
 Int Function FreeSlot()
@@ -124,17 +124,17 @@ Function EnteredCell(Cell here, Actor player)
 	Int i = 0
 	While i < Owners.Length
 		Actor owner = Owners[i]
-		ObjectReference book = Books[i]
-		If owner && book && !owner.IsDead()
-			ObjectReference holder = book.GetContainer()
+		ObjectReference diaryRef = Books[i]
+		If owner && diaryRef && !owner.IsDead()
+			ObjectReference holder = (diaryRef as LWDiary_Book).Holder   ; vanilla Papyrus has no GetContainer
 			If holder == player
 				; the player has it: it stays with them
 			ElseIf here.IsInterior() && IsHome(here, owner, player)
 				If holder == owner && Utility.RandomFloat(0.0, 1.0) < TableChance
 					LayOnTable(i, here, player)
 				EndIf
-			ElseIf !holder && owner.GetParentCell() == here && book.GetParentCell() != here
-				owner.AddItem(book, 1, True)   ; it was left at home and they are out: they took it with them
+			ElseIf !holder && owner.GetParentCell() == here && diaryRef.GetParentCell() != here
+				owner.AddItem(diaryRef, 1, True)   ; it was left at home and they are out: they took it with them
 			EndIf
 		EndIf
 		i += 1
@@ -177,11 +177,11 @@ EndFunction
 ; ---- reading ----
 
 Event OnDiaryOpened(Form bookForm)
-	ObjectReference book = bookForm as ObjectReference
-	If !book || !Books
+	ObjectReference diaryRef = bookForm as ObjectReference
+	If !diaryRef || !Books
 		Return
 	EndIf
-	Int i = Books.Find(book)
+	Int i = Books.Find(diaryRef)
 	If i < 0 || !Owners[i] || NpcIds[i] <= 0
 		Return
 	EndIf
