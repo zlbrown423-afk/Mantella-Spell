@@ -2368,8 +2368,8 @@ endFunction
 ; Players usually point at the chair, then look back at the NPC while speaking, so the pointed
 ; furniture and place are remembered separately from whatever the crosshair is on now.
 Event OnCrosshairRefChange(ObjectReference ref)
-    if (LivingWorldFogSynced && ref as Actor) ; LIVINGWORLD PATCH: fog, the name over the crosshair is right before it shows
-        LivingWorldFog.Apply(ref as Actor, LivingWorldFogKnown, LivingWorldFogOn)
+    if (ref as Actor) ; LIVINGWORLD PATCH: fog, the name over the crosshair is right before it shows
+        LivingWorldFog.Apply(ref as Actor, LivingWorldFogKnown, LivingWorldFogActive())
     endIf
     LwNotePointed(ref)
 EndEvent
@@ -3767,8 +3767,8 @@ function LwBodyScan()
         endWhile
     endIf
     Actor closest = Game.FindClosestActorFromRef(PlayerRef, LwBodyWatchMeters * 71.0210)
-    if (closest && LivingWorldFogSynced) ; LIVINGWORLD PATCH: fog, someone who walks up and greets the player
-        LivingWorldFog.Apply(closest, LivingWorldFogKnown, LivingWorldFogOn)
+    if (closest) ; LIVINGWORLD PATCH: fog, someone who walks up and greets the player
+        LivingWorldFog.Apply(closest, LivingWorldFogKnown, LivingWorldFogActive())
     endIf
     LwBodyAdd(closest, now)
 endFunction
@@ -4678,11 +4678,16 @@ bool function LwEyesCovered()
 endFunction
 
 ; ---- LIVINGWORLD PATCH: fog (names unknown until told; livingworld/fog on the server) ----
-; Kept in the save, so an older save brings back the names the player knew then. Off until the server
-; first says (with a conversation start), so nobody is hidden before the server has sent who the player knows.
+; Kept in the save, so an older save brings back the names the player knew then. Until the server first
+; says (with a conversation start), strangers are hidden: on a new game the player knows nobody. The first
+; conversation brings the server's list (everyone already met) or switches the fog off (MANTELLA_LW_FOG=0).
 bool LivingWorldFogSynced = false
 bool LivingWorldFogOn = false
 string[] LivingWorldFogKnown
+
+bool function LivingWorldFogActive()
+    return LivingWorldFogOn || !LivingWorldFogSynced
+endFunction
 
 ; The start reply: fog on or off, and every real name the player knows
 function LivingWorldFogSet(bool fogOn, string[] known, MantellaConversation conv)
