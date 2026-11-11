@@ -30,6 +30,7 @@ Function NpcFollow(Actor speaker)
     if (speaker)
         Debug.Notification(speaker.GetDisplayName() + " is following you.")
         speaker.SetActorValue("WaitingForPlayer", 0)
+        repository.LwSurrenderFollowed(speaker)   ; LIVINGWORLD PATCH: a survivor sent home comes along again
 
         if (speaker.getrelationshiprank(PlayerRef) != 4)
             speaker.SetFactionRank(repository.giafac_following, 1)
