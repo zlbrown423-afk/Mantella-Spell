@@ -5881,6 +5881,7 @@ endFunction
 
 bool property LwSurrenderOn = true auto hidden
 Actor[] _lwSurvivors   ; everyone who surrendered to the player (kept in the save)
+string[] _lwSurvivorFields   ; ...and their actor field from then (the persistent copy's rebind, if the old ref is gone)
 Actor _lwSurrenderLast   ; the last surrender handled, and its game time: a repeated event is ignored
 float _lwSurrenderLastAt = -1.0
 
@@ -5960,10 +5961,20 @@ Event OnLwSurrenderReplace(Form oldForm, Form newForm)
     if (!old || !copy || old == copy)
         return
     endIf
+    ; read the old reference first: the plugin may disable or delete it right after sending this
+    ; (2026-11-11: a stack trace on this line when its base was already gone)
+    string oldField = LwSafeActorField(old)
+    if (oldField == "")
+        oldField = LwSurvivorField(old)
+    endIf
+    bool wasFollowing = old.IsInFaction(giafac_following) || old.IsPlayerTeammate()
     if (_lwSurvivors)
         int i = _lwSurvivors.Find(old)
         if (i >= 0)
             _lwSurvivors[i] = copy
+            if (_lwSurvivorFields && i < _lwSurvivorFields.Length)
+                _lwSurvivorFields[i] = LwSafeActorField(copy)
+            endIf
         elseIf (!LwIsSurvivor(copy))
             LwAddSurvivor(copy)
         endIf
@@ -5973,13 +5984,53 @@ Event OnLwSurrenderReplace(Form oldForm, Form newForm)
     if (_lwSurrenderLast == old)
         _lwSurrenderLast = copy
     endIf
-    MantellaConversation conv = ListenerScript.conversation
-    if (conv.IsRunning() && conv.Participants.HasForm(old))
+    MantellaConversation conv = None
+    if (ListenerScript)
+        conv = ListenerScript.conversation
+    endIf
+    if (conv && conv.IsRunning() && conv.Participants && conv.Participants.HasForm(old))
         conv.EndConversation()   ; the next one is with the copy, who remembers it
     endIf
-    LivingWorldQueue(LivingWorldHeader("rebind") + "|actor=" + LivingWorldActorField(copy) + "|target=" + LivingWorldActorField(old))
-    Debug.Trace("Mantella Living World: " + LwRealName(copy) + " carried over to her persistent copy")
+    if (wasFollowing && !copy.IsDead())
+        ; she was a Mantella follower: the copy is one too, so Unfollow (and going home) works on her
+        MantellaFollowerUtils.DismissFollower(old, gia_FollowerQst, giafac_following)
+        old.SetPlayerTeammate(false)
+        copy.SetFactionRank(giafac_following, 1)
+        gia_FollowerQst.Reset()
+        gia_FollowerQst.Stop()
+        Utility.Wait(0.5)
+        gia_FollowerQst.Start()
+        copy.SetPlayerTeammate(true)
+        copy.EvaluatePackage()
+    endIf
+    string copyField = LwSafeActorField(copy)
+    if (oldField != "" && copyField != "")
+        LivingWorldQueue(LivingWorldHeader("rebind") + "|actor=" + copyField + "|target=" + oldField)
+        Debug.Trace("Mantella Living World: " + LwRealName(copy) + " carried over to her persistent copy")
+    else
+        Debug.Trace("Mantella Living World: could not read the old or new reference for the persistent copy; no rebind")
+    endIf
 EndEvent
+
+; LivingWorldActorField, or "" when the actor (or its base) is no longer there.
+string function LwSafeActorField(Actor a)
+    if (!a || !a.GetActorBase() || !ListenerScript || !ListenerScript.conversation)
+        return ""
+    endIf
+    return LivingWorldActorField(a)
+endFunction
+
+; The actor field noted when they surrendered (for a reference that is gone by now), or "".
+string function LwSurvivorField(Actor a)
+    if (!a || !_lwSurvivors || !_lwSurvivorFields)
+        return ""
+    endIf
+    int i = _lwSurvivors.Find(a)
+    if (i < 0 || i >= _lwSurvivorFields.Length)
+        return ""
+    endIf
+    return _lwSurvivorFields[i]
+endFunction
 
 bool function LwIsSurvivor(Actor a)
     return a && _lwSurvivors && _lwSurvivors.Find(a) >= 0
@@ -5989,11 +6040,15 @@ function LwAddSurvivor(Actor a)
     if (!_lwSurvivors)
         _lwSurvivors = new Actor[8]
     endIf
+    if (!_lwSurvivorFields)
+        _lwSurvivorFields = new string[8]
+    endIf
     int i = _lwSurvivors.Find(None)
     if (i < 0)
         i = 0   ; full: the oldest slot goes
     endIf
     _lwSurvivors[i] = a
+    _lwSurvivorFields[i] = LwSafeActorField(a)
 endFunction
 
 ; From Mantella's Unfollow: a survivor goes home instead of standing where she was left.
