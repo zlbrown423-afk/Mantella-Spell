@@ -3,7 +3,7 @@
 # Output: Dist/LWHaptics-<version>.zip, laid out for Vortex (SKSE/Plugins/...).
 set -euo pipefail
 cd "$(dirname "$0")"
-VERSION=0.1.0
+VERSION=0.1.1
 OUT=build
 mkdir -p "$OUT" Dist
 llvm-dlltool -m i386:x86-64 -d src/kernel32.def -l "$OUT/kernel32.lib"

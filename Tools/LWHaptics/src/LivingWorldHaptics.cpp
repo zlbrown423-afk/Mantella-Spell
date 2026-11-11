@@ -181,8 +181,22 @@ namespace {
         return g_vr;
     }
 
+    unsigned long __stdcall Worker(void*);
+    volatile long g_workerStarted = 0;
+
+    // The rumble thread and OpenVR are only touched here, i.e. on the first real pulse inside a scene.
+    // Nothing of ours may run during startup or the main menu (0.1.0 was blamed for dead controllers at
+    // "Press any button"; see README "0.1.1").
     void Request(int ms, int perMille) {
         if (perMille <= 0 || ms <= 0) return;
+        if (__atomic_exchange_n(&g_workerStarted, 1, __ATOMIC_SEQ_CST) == 0) {
+            g_wake = CreateEventA(nullptr, 0, 0, nullptr);  // auto-reset
+            if (!g_wake || !CreateThread(nullptr, 0, Worker, nullptr, 0, nullptr)) {
+                Log("could not start the rumble thread");
+                return;
+            }
+            Log("rumble thread started");
+        }
         g_requestMs = ms;
         g_requestStrength = perMille > 1000 ? 1000 : perMille;
         __atomic_add_fetch(&g_requestSeq, 1, __ATOMIC_SEQ_CST);
@@ -308,8 +322,9 @@ namespace {
 
     void HookOStim() {
         if (g_hooked || !g_messaging) return;
+        // Addressed to OStim only. Never broadcast: other plugins (ControllerFixVR, VRIK, HIGGS ...) would
+        // receive a message type they don't know.
         OStim::InterfaceMap* map = AskOStim("OStim");
-        if (!map) map = AskOStim(nullptr);
         if (!map) {
             Log("OStim did not answer (is OStim.dll loaded?)");
             return;
@@ -332,16 +347,16 @@ namespace {
     void OnSkse(skse::Message* msg) {
         if (!msg) return;
         switch (msg->type) {
-            case skse::kPostPostLoad:
-            case skse::kDataLoaded:
-                HookOStim();
-                break;
             case skse::kPostLoadGame:
             case skse::kNewGame:
+                // Only once a save is loaded (well past the main menu) do we contact OStim at all,
+                // and only when the ini says the feature is on.
                 LoadSettings();
                 g_armed = 0;
                 g_inScene = 0;
-                if (g_settings.testOnLoad) {
+                Log(g_settings.enabled ? "save loaded" : "save loaded; bEnabled=0, staying inactive");
+                if (g_settings.enabled) HookOStim();
+                if (g_settings.enabled && g_settings.testOnLoad) {
                     Log("test pulse");
                     Request(600, g_settings.strength * 10);  // one long buzz; never sleep on the game thread
                 }
@@ -382,7 +397,7 @@ __declspec(dllexport) bool SKSEPlugin_Query(const skse::Interface* skse, skse::P
 __declspec(dllexport) bool SKSEPlugin_Load(const skse::Interface* skse) {
     SetPaths();
     StartLog();
-    Log("LivingWorldHaptics 0.1.0 loading");
+    Log("LivingWorldHaptics 0.1.1 loading");
     LoadSettings();
     g_handle = skse->GetPluginHandle();
     g_messaging = (skse::MessagingInterface*)skse->QueryInterface(skse::kInterface_Messaging);
@@ -390,8 +405,7 @@ __declspec(dllexport) bool SKSEPlugin_Load(const skse::Interface* skse) {
         Log("no SKSE messaging interface");
         return false;
     }
-    g_wake = CreateEventA(nullptr, 0, 0, nullptr);  // auto-reset
-    CreateThread(nullptr, 0, Worker, nullptr, 0, nullptr);
+    // Nothing else at startup: no thread, no OStim, no OpenVR until a save is loaded.
     return true;
 }
 }

@@ -42,3 +42,14 @@ for Vortex. Needs OStim Standalone (VR port) loaded; without it the dll only log
 
 `src/openvr.h` is Valve's OpenVR header v1.0.10 (BSD-3-Clause, Copyright Valve Corporation).
 `src/OStimPluginInterface.h` mirrors OStimNG 7.5.1b's plugin interface (GPL-3.0).
+
+## 0.1.1: stays completely idle until a save is loaded
+
+A report said the Touch controllers (laser pointers) did not respond at "Press any button" while 0.1.0 was
+installed. 0.1.0's log shows it only registered with OStim at startup and never called OpenVR, so the cause
+is not proven. 0.1.1 removes every startup action anyway:
+
+* at game start it only registers for SKSE's "save loaded" message; no thread, no OStim, no OpenVR;
+* it contacts OStim only after a save has loaded, and not at all with `bEnabled=0`;
+* the rumble thread and OpenVR are first touched on the first real pulse inside a scene;
+* the message to OStim is addressed to OStim only (0.1.0 could fall back to a broadcast to all plugins).
