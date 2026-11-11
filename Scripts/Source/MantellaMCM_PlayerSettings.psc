@@ -51,6 +51,9 @@ function SliderOptionAccept(MantellaMCM mcm, int optionID, float value, Mantella
     ;SliderOptionAccept is used to update the Repository with the user input (that input will then be used by the Mantella effect script
     If  optionId == mcm.oid_worldID
         mcm.SetSliderOptionValue(optionId, value)
+        if (Repository.worldID != value as int)
+            Repository.LivingWorldWorldKey = "" ; LIVINGWORLD PATCH: a new World ID starts a separate world, as before
+        endif
         Repository.worldID = value as int
     EndIf
 endfunction

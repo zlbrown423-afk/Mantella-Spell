@@ -178,6 +178,9 @@ function ContinueConversation(string nextAction, int handle)
         if(SKSE_HTTP.hasKey(handle,mConsts.KEY_STARTCONVERSATION_USENARRATOR))
             _useNarrator = SKSE_HTTP.getBool(handle, mConsts.KEY_STARTCONVERSATION_USENARRATOR, false)
         endif
+        if(SKSE_HTTP.hasKey(handle, "mantella_lw_world_key")) ; LIVINGWORLD PATCH: remember the world in the save, so a rename keeps the memories
+            repository.LivingWorldWorldKey = SKSE_HTTP.getString(handle, "mantella_lw_world_key", repository.LivingWorldWorldKey)
+        endif
         if(SKSE_HTTP.hasKey(handle, "mantella_lw_timeline_id")) ; LIVINGWORLD PATCH: remember the timeline in the save
             repository.LivingWorldTimelineId = SKSE_HTTP.getInt(handle, "mantella_lw_timeline_id", repository.LivingWorldTimelineId)
         endif
@@ -916,6 +919,9 @@ function LivingWorldDiaryKeepers(int handle)
     int[] npcIds = SKSE_HTTP.getIntArray(handle, "mantella_lw_diary_npc_ids")
     string[] titles = SKSE_HTTP.getStringArray(handle, "mantella_lw_diary_titles")
     string worldId = PlayerRef.GetDisplayName() + repository.worldID
+    if (repository.LivingWorldWorldKey != "") ; the world the server named for this save (survives a rename)
+        worldId = repository.LivingWorldWorldKey
+    endif
     int i = 0
     while (i < refIds.Length && i < npcIds.Length && i < titles.Length)
         Actor keeper = Game.GetForm(refIds[i]) as Actor
@@ -1177,6 +1183,7 @@ endFunction
 
 ; LIVINGWORLD PATCH: the save-load info the server needs to roll memories back to this save
 function AddLivingWorldLoadInfo(int handle)
+    SKSE_HTTP.setString(handle, "mantella_lw_world_key", repository.LivingWorldWorldKey) ; always sent, "" until the server names the world
     if (repository.LivingWorldLoadNonce != 0)
         SKSE_HTTP.setInt(handle, "mantella_lw_timeline_id", repository.LivingWorldTimelineId)
         SKSE_HTTP.setInt(handle, "mantella_lw_load_nonce", repository.LivingWorldLoadNonce)
