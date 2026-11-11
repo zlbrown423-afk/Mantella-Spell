@@ -187,6 +187,9 @@ function ContinueConversation(string nextAction, int handle)
         if(SKSE_HTTP.hasKey(handle, "mantella_lw_body_on")) ; LIVINGWORLD PATCH: body language (BL1) on or off
             repository.LivingWorldSetBodyLanguage(SKSE_HTTP.getBool(handle, "mantella_lw_body_on", true))
         endif
+        if(SKSE_HTTP.hasKey(handle, "mantella_lw_gestures_on")) ; LIVINGWORLD PATCH: VR gestures (BL2) on or off
+            repository.LivingWorldSetGestures(SKSE_HTTP.getBool(handle, "mantella_lw_gestures_on", true), SKSE_HTTP.getBool(handle, "mantella_lw_gesture_notices", true))
+        endif
         if(SKSE_HTTP.hasKey(handle, "mantella_lw_intimacy_on")) ; LIVINGWORLD PATCH: intimate scenes (OStim) on or off
             repository.LivingWorldIntimacyOn = SKSE_HTTP.getBool(handle, "mantella_lw_intimacy_on", true)
         endif

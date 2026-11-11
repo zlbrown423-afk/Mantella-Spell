@@ -1785,6 +1785,7 @@ function LivingWorldRegisterAttireAndDrink()
     _lwTickDue = 0.0
     _lwRegularDueAt = Utility.GetCurrentRealTime() + LivingWorldHygienePollSeconds
     LwBodyReset() ; LIVINGWORLD PATCH: body language (BL1)
+    LwGestureReset() ; LIVINGWORLD PATCH: gestures (BL2)
     LwScheduleNext(Utility.GetCurrentRealTime())
 endFunction
 
@@ -1926,11 +1927,16 @@ Event OnUpdate()
         return
     endIf
     if (LivingWorldBodyLanguageOn && now >= _lwbDueAt)
-        if (LwBodyTick(now))
+        _lwbWatching = LwBodyTick(now)
+        if (_lwbWatching)
             _lwbDueAt = now + LwBodyTickSeconds
         else
             _lwbDueAt = now + LwBodyScanSeconds
         endIf
+    endIf
+    if (LwGesturesActive() && now >= _lwgDueAt && !Utility.IsInMenuMode() && !PlayerRef.IsInCombat())
+        LwGestureTick(now)
+        _lwgDueAt = Utility.GetCurrentRealTime() + _lwgInterval
     endIf
     LwScheduleNext(now)
 EndEvent
@@ -1943,6 +1949,9 @@ function LwScheduleNext(float now)
     endIf
     if (LivingWorldBodyLanguageOn && (due < 0.0 || _lwbDueAt < due))
         due = _lwbDueAt
+    endIf
+    if (LwGesturesActive() && (due < 0.0 || _lwgDueAt < due))
+        due = _lwgDueAt
     endIf
     if (due >= 0.0)
         LwScheduleTick(due - now)
@@ -5193,4 +5202,448 @@ bool function LwPeekMarkerFollow()
         _lwPeekMarker.MoveToNode(PlayerRef, "NPC Pelvis [Pelv]")
     endIf
     return true
+endFunction
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; LIVINGWORLD PATCH: body language, step 2 (BL2): VR gestures                                        ;
+; While body language watches someone, the right hand and the headset are sampled through VRIK about ;
+; seven times a second (relative to the headset, so walking does not count) and a few gestures are   ;
+; recognised: wave, nod, head shake, point, beckon, hands up, thumbs up and down. Each one becomes a  ;
+; type=presence record to the NPC the player faces (hands up: everyone watched), with its own        ;
+; cooldown; the server decides what it means to them (livingworld/bodylang/presence.py).             ;
+; Positions are in game units (about 70 to the metre). If sampling costs too much, it slows down,    ;
+; and turns itself off for the session if that is still too slow.                                   ;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+bool property LivingWorldGesturesOn = true auto hidden      ; the server's start reply switches it (MANTELLA_LW_GESTURES)
+bool property LivingWorldGestureNotices = true auto hidden  ; show each recognised gesture (MANTELLA_LW_GESTURE_NOTICES)
+float property LwGestureSeconds = 0.15 auto hidden
+
+bool _lwgVrik = false
+bool _lwbWatching = false
+float _lwgDueAt = 0.0
+float _lwgInterval = 0.15
+float[] _lwgHx              ; ring of the last 10 samples: right hand relative to the headset
+float[] _lwgHy
+float[] _lwgHz
+float[] _lwgEx              ; the headset
+float[] _lwgEy
+float[] _lwgEz
+int _lwgN = 0               ; samples in the ring since it was last cleared
+int _lwgUpTicks = 0
+int _lwgRaisedTicks = 0
+int _lwgThumbTicks = 0
+int _lwgPointTicks = 0
+int _lwgGripBase = -1
+float _lwgGripBaseAt = 0.0
+float _lwgLastWave = -100.0
+float _lwgLastNod = -100.0
+float _lwgLastShake = -100.0
+float _lwgLastPoint = -100.0
+float _lwgLastBeckon = -100.0
+float _lwgLastUp = -100.0
+float _lwgLastThumb = -100.0
+float _lwgCostSum = 0.0
+int _lwgCostN = 0
+bool _lwgSlowed = false
+
+; Called with LwBodyReset on every load.
+function LwGestureReset()
+    _lwgVrik = VRIK.VrikGetBuildNumber() > 0
+    _lwgHx = new float[10]
+    _lwgHy = new float[10]
+    _lwgHz = new float[10]
+    _lwgEx = new float[10]
+    _lwgEy = new float[10]
+    _lwgEz = new float[10]
+    _lwgN = 0
+    _lwgUpTicks = 0
+    _lwgRaisedTicks = 0
+    _lwgThumbTicks = 0
+    _lwgPointTicks = 0
+    _lwgGripBase = -1
+    _lwgDueAt = 0.0
+    _lwgInterval = LwGestureSeconds
+    _lwgCostSum = 0.0
+    _lwgCostN = 0
+    _lwgSlowed = false
+    if (!_lwgVrik)
+        Debug.Trace("Mantella Living World: VRIK not found; gestures are off")
+    endIf
+endFunction
+
+bool function LwGesturesActive()
+    return LivingWorldGesturesOn && LivingWorldBodyLanguageOn && _lwgVrik && _lwbWatching
+endFunction
+
+; The start reply's switches (mantella_lw_gestures_on, mantella_lw_gesture_notices).
+function LivingWorldSetGestures(bool on, bool notices)
+    LivingWorldGestureNotices = notices
+    if (on != LivingWorldGesturesOn)
+        LivingWorldGesturesOn = on
+        _lwgN = 0
+        if (on && !_lwProbeOn)
+            LwScheduleNext(Utility.GetCurrentRealTime())
+        endIf
+    endIf
+endFunction
+
+int function LwgAt(int back)   ; ring index of the sample taken `back` samples ago
+    return (_lwgN - 1 - back) % 10
+endFunction
+
+; How many times the motion turned around over the last `count` samples. kind 0: the hand side to side,
+; 1: the headset up and down, 2: the headset side to side. Only moves of at least `minStep` count, so a
+; turnaround that falls between two samples is still seen.
+int function LwgReversals(int kind, int count, float minStep)
+    if (count > _lwgN)
+        count = _lwgN
+    endIf
+    int turns = 0
+    float lastX = 0.0
+    float lastY = 0.0
+    bool haveLast = false
+    int k = count - 1
+    while (k > 0)
+        int a = LwgAt(k)
+        int b = LwgAt(k - 1)
+        float dx = 0.0
+        float dy = 0.0
+        if (kind == 0)
+            dx = _lwgHx[b] - _lwgHx[a]
+            dy = _lwgHy[b] - _lwgHy[a]
+        elseIf (kind == 1)
+            dx = _lwgEz[b] - _lwgEz[a]
+        else
+            dx = _lwgEx[b] - _lwgEx[a]
+            dy = _lwgEy[b] - _lwgEy[a]
+        endIf
+        float len = Math.sqrt(dx * dx + dy * dy)
+        if (len > 105.0)   ; over 1.5 m in one sample: a teleport or a load, not a gesture
+            return 0
+        endIf
+        if (len >= minStep)
+            if (haveLast && dx * lastX + dy * lastY < 0.0)
+                turns += 1
+            endIf
+            lastX = dx
+            lastY = dy
+            haveLast = true
+        endIf
+        k -= 1
+    endWhile
+    return turns
+endFunction
+
+; How far the headset (kind 1: up and down only) or the hand moved, end to end, over the last `count` samples.
+float function LwgNet(int kind, int count)
+    if (count > _lwgN)
+        count = _lwgN
+    endIf
+    if (count < 2)
+        return 0.0
+    endIf
+    int a = LwgAt(count - 1)
+    int b = LwgAt(0)
+    if (kind == 0)
+        return Math.sqrt((_lwgHx[b] - _lwgHx[a]) * (_lwgHx[b] - _lwgHx[a]) + (_lwgHy[b] - _lwgHy[a]) * (_lwgHy[b] - _lwgHy[a]) + (_lwgHz[b] - _lwgHz[a]) * (_lwgHz[b] - _lwgHz[a]))
+    elseIf (kind == 1)
+        return Math.abs(_lwgEz[b] - _lwgEz[a])
+    endIf
+    return Math.sqrt((_lwgEx[b] - _lwgEx[a]) * (_lwgEx[b] - _lwgEx[a]) + (_lwgEy[b] - _lwgEy[a]) * (_lwgEy[b] - _lwgEy[a]))
+endFunction
+
+; The watched NPC the player faces most, within 40 degrees (or the only one watched).
+Actor function LwgAddressee()
+    Actor best = None
+    float bestAngle = 40.0
+    int watched = 0
+    Actor only = None
+    int i = 0
+    while (i < 4)
+        Actor a = _lwbActors[i]
+        if (a)
+            watched += 1
+            only = a
+            float ang = Math.abs(PlayerRef.GetHeadingAngle(a))
+            if (ang < bestAngle)
+                bestAngle = ang
+                best = a
+            endIf
+        endIf
+        i += 1
+    endWhile
+    if (!best && watched == 1 && Math.abs(PlayerRef.GetHeadingAngle(only)) < 70.0)
+        best = only
+    endIf
+    return best
+endFunction
+
+function LwGesture(string what, Actor about)
+    _lwgN = 0   ; start the next gesture from fresh samples
+    if (what == "hands_up")
+        int i = 0
+        while (i < 4)
+            if (_lwbActors[i])
+                LwBodyRecord(_lwbActors[i], what, "")
+            endIf
+            i += 1
+        endWhile
+        if (LivingWorldGestureNotices)
+            Debug.Notification("Gesture: hands up")
+        endIf
+        return
+    endIf
+    Actor to = LwgAddressee()
+    if (!to)
+        if (LivingWorldGestureNotices)
+            Debug.Notification("Gesture: " + what + " (nobody facing you)")
+        endIf
+        return
+    endIf
+    string extra = ""
+    if (about)
+        extra = "|about=" + about.GetDisplayName()
+    endIf
+    LwBodyRecord(to, what, extra + "|dist=" + (to.GetDistance(PlayerRef) / 71.0210))
+    if (LivingWorldGestureNotices)
+        string text = "Gesture: " + what + " to " + to.GetDisplayName()
+        if (about)
+            text += " (at " + about.GetDisplayName() + ")"
+        endIf
+        Debug.Notification(text)
+    endIf
+endFunction
+
+; Who the right hand points at: the watched NPC or conversation participant closest to the line from
+; the player through the hand, within 20 degrees.
+Actor function LwgPointedAt()
+    float[] p = new float[3]
+    if (!NetImmerse.GetNodeWorldPosition(PlayerRef, "NPC R Hand [RHnd]", p, true))
+        return None
+    endIf
+    float px = PlayerRef.GetPositionX()
+    float py = PlayerRef.GetPositionY()
+    float dx = p[0] - px
+    float dy = p[1] - py
+    float dlen = Math.sqrt(dx * dx + dy * dy)
+    if (dlen < 10.0)
+        return None
+    endIf
+    Actor best = None
+    float bestCos = Math.cos(20.0)
+    int i = 0
+    while (i < 4)
+        Actor a = _lwbActors[i]
+        if (a)
+            float ax = a.GetPositionX() - px
+            float ay = a.GetPositionY() - py
+            float alen = Math.sqrt(ax * ax + ay * ay)
+            if (alen > 1.0)
+                float c = (ax * dx + ay * dy) / (alen * dlen)
+                if (c > bestCos)
+                    bestCos = c
+                    best = a
+                endIf
+            endIf
+        endIf
+        i += 1
+    endWhile
+    return best
+endFunction
+
+; +1 the right thumb points up, -1 down, 0 neither (the first-person hand follows VRIK's finger tracking).
+int function LwgThumbDirection()
+    float[] p = new float[3]
+    if (!NetImmerse.GetNodeWorldPosition(PlayerRef, "NPC R Finger00 [RF00]", p, true))
+        return 0
+    endIf
+    float bx = p[0]
+    float by = p[1]
+    float bz = p[2]
+    if (!NetImmerse.GetNodeWorldPosition(PlayerRef, "NPC R Finger02 [RF02]", p, true))
+        return 0
+    endIf
+    float dz = p[2] - bz
+    float len = Math.sqrt((p[0] - bx) * (p[0] - bx) + (p[1] - by) * (p[1] - by) + dz * dz)
+    if (len < 0.5)
+        return 0
+    endIf
+    if (dz > 0.7 * len)
+        return 1
+    elseIf (dz < -0.7 * len)
+        return -1
+    endIf
+    return 0
+endFunction
+
+function LwGestureTick(float now)
+    float t0 = Utility.GetCurrentRealTime()
+    float ex = VRIK.VrikGetHmdX()
+    float ey = VRIK.VrikGetHmdY()
+    float ez = VRIK.VrikGetHmdZ()
+    float hx = VRIK.VrikGetHandX(false) - ex
+    float hy = VRIK.VrikGetHandY(false) - ey
+    float hz = VRIK.VrikGetHandZ(false) - ez
+    float lz = VRIK.VrikGetHandZ(true) - ez
+    int i = _lwgN % 10
+    _lwgHx[i] = hx
+    _lwgHy[i] = hy
+    _lwgHz[i] = hz
+    _lwgEx[i] = ex
+    _lwgEy[i] = ey
+    _lwgEz[i] = ez
+    _lwgN += 1
+    if (_lwgN > 1000)
+        _lwgN = 10 + _lwgN % 10
+    endIf
+    float reach = Math.sqrt(hx * hx + hy * hy)   ; how far out in front or to the side the hand is
+    bool free = !PlayerRef.IsWeaponDrawn() && !HiggsVR.GetGrabbedObject(false)
+    MantellaConversation conv = ListenerScript.conversation
+    bool talking = conv && conv.IsRunning()
+
+    ; hands up: both hands above the head for about a second
+    if (hz > 6.0 && lz > 6.0)
+        _lwgUpTicks += 1
+    else
+        _lwgUpTicks = 0
+    endIf
+    if (_lwgUpTicks >= 6 && now - _lwgLastUp >= 30.0)
+        _lwgLastUp = now
+        _lwgUpTicks = 0
+        LwGesture("hands_up", None)
+        LwGestureCost(t0)
+        return
+    endIf
+
+    ; wave: the right hand at head height, out to the side or front, turning around at least twice
+    if (hz > -10.0 && hz < 40.0 && reach > 12.0 && lz < 0.0)
+        _lwgRaisedTicks += 1
+    else
+        _lwgRaisedTicks = 0
+    endIf
+    if (_lwgRaisedTicks >= 5 && now - _lwgLastWave >= 20.0 && LwgReversals(0, _lwgRaisedTicks, 3.5) >= 2)
+        _lwgLastWave = now
+        _lwgRaisedTicks = 0
+        LwGesture("wave", None)
+        LwGestureCost(t0)
+        return
+    endIf
+
+    bool grip = free && VRIK.VrikIsGripPressed(false)
+    bool triggerTouched = false
+    if (grip)
+        triggerTouched = VRIK.VrikIsTriggerTouched(false)
+    endIf
+
+    ; thumbs up or down: grip and trigger held, the thumb off the stick and buttons and upright
+    if (grip && triggerTouched && hz < 0.0 && !VRIK.VrikIsThumbstickTouched(false) && !VRIK.VrikIsButtonATouched(false) && !VRIK.VrikIsButtonBTouched(false))
+        _lwgThumbTicks += 1
+    else
+        _lwgThumbTicks = 0
+    endIf
+    if (_lwgThumbTicks >= 4 && now - _lwgLastThumb >= 15.0)
+        int dir = LwgThumbDirection()
+        if (dir != 0)
+            _lwgLastThumb = now
+            _lwgThumbTicks = 0
+            if (dir > 0)
+                LwGesture("thumbs_up", None)
+            else
+                LwGesture("thumbs_down", None)
+            endIf
+            LwGestureCost(t0)
+            return
+        endIf
+    endIf
+
+    ; point: the arm held out still with the index finger off the trigger
+    if (grip && !triggerTouched && reach > 32.0 && hz > -32.0 && hz < 12.0)
+        _lwgPointTicks += 1
+    else
+        _lwgPointTicks = 0
+    endIf
+    if (_lwgPointTicks >= 5 && now - _lwgLastPoint >= 10.0 && LwgNet(0, 5) < 3.0)
+        _lwgLastPoint = now
+        _lwgPointTicks = 0
+        LwGesture("point", LwgPointedAt())
+        LwGestureCost(t0)
+        return
+    endIf
+
+    ; beckon: the hand out in front and the fingers curled in (grip pressed) twice within two seconds
+    if (free && reach > 18.0 && hz > -35.0 && hz < 8.0)
+        int presses = VRIK.VrikGripPressCount(false)
+        if (_lwgGripBase < 0 || now - _lwgGripBaseAt > 2.0)
+            _lwgGripBase = presses
+            _lwgGripBaseAt = now
+        elseIf (presses - _lwgGripBase >= 2 && now - _lwgLastBeckon >= 15.0)
+            _lwgLastBeckon = now
+            _lwgGripBase = -1
+            LwGesture("beckon", None)
+            LwGestureCost(t0)
+            return
+        endIf
+    else
+        _lwgGripBase = -1
+    endIf
+
+    ; nod and head shake: only toward someone close (or in a conversation), standing still, hands down
+    if (hz < -15.0 && (talking || LwgAddressee()))
+        if (now - _lwgLastNod >= 8.0 && LwgReversals(1, 8, 0.7) >= 2 && LwgNet(2, 8) < 3.0)
+            _lwgLastNod = now
+            LwGesture("nod", None)
+        elseIf (now - _lwgLastShake >= 8.0 && LwgReversals(2, 8, 0.9) >= 2 && LwgNet(2, 8) < 3.0 && LwgRangeZ(8) < 1.5)
+            _lwgLastShake = now
+            LwGesture("shake", None)
+        endIf
+    endIf
+    LwGestureCost(t0)
+endFunction
+
+float function LwgRangeZ(int count)   ; how far the headset moved up and down over the last samples
+    if (count > _lwgN)
+        count = _lwgN
+    endIf
+    float lo = 100000.0
+    float hi = -100000.0
+    int k = 0
+    while (k < count)
+        float z = _lwgEz[LwgAt(k)]
+        if (z < lo)
+            lo = z
+        endIf
+        if (z > hi)
+            hi = z
+        endIf
+        k += 1
+    endWhile
+    if (hi < lo)
+        return 0.0
+    endIf
+    return hi - lo
+endFunction
+
+; Keeps gesture sampling cheap: slower if a tick costs over 60 ms on average, off for the session if still
+; over 120 ms (the game's scripts must never fall behind because of this).
+function LwGestureCost(float t0)
+    _lwgCostSum += Utility.GetCurrentRealTime() - t0
+    _lwgCostN += 1
+    if (_lwgCostN < 20)
+        return
+    endIf
+    float avg = _lwgCostSum / _lwgCostN
+    _lwgCostSum = 0.0
+    _lwgCostN = 0
+    if (!_lwgSlowed && avg > 0.06)
+        _lwgSlowed = true
+        _lwgInterval = LwGestureSeconds * 2.0
+        Debug.Trace("Mantella Living World gestures: a sample takes " + avg + " s; sampling less often")
+    elseIf (_lwgSlowed && avg > 0.12)
+        _lwgVrik = false
+        Debug.Trace("Mantella Living World gestures: a sample takes " + avg + " s; gestures off until the next load")
+        if (LivingWorldGestureNotices)
+            Debug.Notification("Gestures switched off: too slow on this game")
+        endIf
+    endIf
 endFunction
