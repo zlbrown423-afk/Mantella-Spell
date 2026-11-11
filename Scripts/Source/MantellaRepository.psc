@@ -3816,6 +3816,9 @@ bool function LwBodyTick(float now)
     endIf
     bool weaponOut = PlayerRef.IsWeaponDrawn()
     bool weaponDrawnNow = weaponOut && !_lwbWeaponWas
+    if (weaponDrawnNow && Utility.GetCurrentRealTime() - _lwErectEventAt < 3.0)
+        weaponDrawnNow = false   ; the arousal animation, not a weapon (see LwSetErect)
+    endIf
     _lwbWeaponWas = weaponOut
     MantellaConversation conv = ListenerScript.conversation
     bool talking = conv && conv.IsRunning()
@@ -4560,6 +4563,7 @@ float property LwArousalTapGap = 0.6 auto hidden       ; taps closer together th
 float property LwArousalHoldSeconds = 120.0 auto hidden
 int property LwArousalVisibleLevel = -4 auto hidden   ; TNG bend from -10 (soft) to 9: from here on it shows
 int _lwErect = -10
+float _lwErectEventAt = -100.0   ; real time of the last arousal animation event
 float _lwTapAt = -100.0
 int _lwArousalWatch = 0
 bool _lwErectShown = false
@@ -4649,6 +4653,8 @@ function LwSetErect(int level)
     if (level > 9)
         level = 9
     endIf
+    bool wasDrawn = PlayerRef.IsWeaponDrawn()
+    _lwErectEventAt = Utility.GetCurrentRealTime()
     if (level <= -10)
         level = -10
         Debug.SendAnimationEvent(PlayerRef, "SOSFlaccid")
@@ -4656,6 +4662,15 @@ function LwSetErect(int level)
         Debug.SendAnimationEvent(PlayerRef, "SOSBend" + level)
     endIf
     _lwErect = level
+    ; TNG's SOSBend/SOSFlaccid go through the player's behavior graph, and on the VR body that can flip
+    ; the weapon-drawn state (guards and NPCs then react as if a weapon came out). Put it back.
+    if (!wasDrawn)
+        Utility.Wait(0.25)
+        if (PlayerRef.IsWeaponDrawn())
+            PlayerRef.SheatheWeapon()
+            _lwErectEventAt = Utility.GetCurrentRealTime()
+        endIf
+    endIf
     bool shown = level >= LwArousalVisibleLevel
     if (shown != _lwErectShown)
         _lwErectShown = shown
