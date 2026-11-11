@@ -5956,6 +5956,7 @@ endFunction
 ; From Mantella's Unfollow: a survivor goes home instead of standing where she was left.
 function LwSurrenderUnfollowed(Actor a)
     if (LwSurrenderOn && LwIsSurvivor(a) && !a.IsDead())
+        a.SetPlayerTeammate(false)
         LwSurrenderSend("LivingWorld_SurrenderHome", a)
     endIf
 endFunction
@@ -5963,6 +5964,8 @@ endFunction
 ; From Mantella's Follow: a survivor sent home comes along again.
 function LwSurrenderFollowed(Actor a)
     if (LwSurrenderOn && LwIsSurvivor(a) && !a.IsDead())
+        a.SetPlayerTeammate(true)   ; a teammate goes through load doors with the player (2026-11-11: left at Whiterun's gate)
+        a.EvaluatePackage()
         LwSurrenderSend("LivingWorld_SurrenderFollow", a)
     endIf
 endFunction
