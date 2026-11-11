@@ -3,9 +3,12 @@ Scriptname LWCoverEyes_Quest extends Quest
 when it is cast: the screen fades to black (Skyrim's own FadeToBlackHoldImod), sound keeps playing. The
 eyes uncover by themselves after MaxSeconds, on a second cast, or when combat starts, so nobody is left
 blind. Each change is sent as the mod event LivingWorld_EyesCovered (1 covered, 0 not), which the Living
-World build of Mantella turns into what the NPCs around notice.}
+World build of Mantella turns into what the NPCs around notice.
+Also gives the "Arousal" lesser power: each cast sends LivingWorld_ArousalStep, which the Living World
+build of Mantella turns into one step of The New Gentleman's erection (the same as tapping the arousal key).}
 
 Spell Property CoverEyes Auto
+Spell Property ArousalPower Auto
 Float Property MaxSeconds = 30.0 Auto
 Int Property DarknessFormId = 0x0F756E Auto   ; FadeToBlackHoldImod, Skyrim.esm
 
@@ -20,7 +23,14 @@ Event OnInit()
 	If CoverEyes && !player.HasSpell(CoverEyes)
 		player.AddSpell(CoverEyes, True)
 	EndIf
+	If ArousalPower && !player.HasSpell(ArousalPower)
+		player.AddSpell(ArousalPower, True)
+	EndIf
 EndEvent
+
+Function ArousalStep()
+	SendModEvent("LivingWorld_ArousalStep", "", 1.0)
+EndFunction
 
 Function Toggle()
 	If covered

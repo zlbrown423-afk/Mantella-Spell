@@ -1,7 +1,7 @@
 # LWCoverEyes
 
-A tiny companion plugin for the Living World build of Mantella: one lesser power, **Cover Your Eyes**,
-given to the player automatically. Put it on the Spell Wheel.
+A tiny companion plugin for the Living World build of Mantella: two lesser powers, **Cover Your Eyes**
+and **Arousal**, given to the player automatically. Put them on the Spell Wheel.
 
 * Cast it: the screen fades to black (Skyrim's own `FadeToBlackHoldImod`), sound keeps playing.
 * Cast it again to look. It also uncovers by itself after 30 seconds or when a fight starts.
@@ -9,7 +9,13 @@ given to the player automatically. Put it on the Spell Wheel.
   `MantellaRepository` turns it into an `eyes` record, so NPCs around know the player cannot see, and a
   running conversation hears "... covers their eyes".
 
-Works without Mantella too (only the dark screen then). Master: Skyrim.esm only.
+**Arousal** (male player with The New Gentleman) does what rapid taps of the arousal key (NumPad 5) do,
+for VR where a keyboard key is awkward: each cast is one step up (visibly aroused, more, fully), a cast
+when fully aroused lets it go down, and it fades by itself after two minutes. It sends the mod event
+`LivingWorld_ArousalStep`; `MantellaRepository` moves TNG and tells the NPCs around. Without Mantella it
+does nothing.
+
+Cover Your Eyes works without Mantella too (only the dark screen then). Master: Skyrim.esm only.
 
 Build on the play PC: `powershell -ExecutionPolicy Bypass -File build.ps1` (Spriggit + Papyrus Compiler,
 the same tools as LWAskLead). The zip lands in `Dist\` for Vortex.

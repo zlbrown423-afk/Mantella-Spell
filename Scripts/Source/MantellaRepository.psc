@@ -1847,7 +1847,8 @@ string[] function LivingWorldAttireSnapshot()
     endIf
     Actor[] nearby = ListenerScript.ScanNearbyActors()
     FormList participants = ListenerScript.conversation.Participants
-    int total = 1 + participants.GetSize() + nearby.Length
+    int partCount = participants.GetSize()   ; read once: the list can change while this loop waits on calls
+    int total = 1 + partCount + nearby.Length
     Actor[] done = new Actor[30]
     int doneCount = 0
     string[] result = Utility.CreateStringArray(0)
@@ -1856,12 +1857,12 @@ string[] function LivingWorldAttireSnapshot()
         Actor a
         if (i == 0)
             a = PlayerRef
-        elseIf (i <= participants.GetSize())
+        elseIf (i <= partCount)
             a = participants.GetAt(i - 1) as Actor
         else
-            a = nearby[i - 1 - participants.GetSize()]
+            a = nearby[i - 1 - partCount]
         endIf
-        if (LivingWorldIsPerson(a) && done.Find(a) < 0 && a.GetDistance(PlayerRef) / 71.0210 <= LivingWorldWitnessScanMeters)
+        if (a && LivingWorldIsPerson(a) && done.Find(a) < 0 && a.GetDistance(PlayerRef) / 71.0210 <= LivingWorldWitnessScanMeters)
             done[doneCount] = a
             doneCount += 1
             result = Utility.ResizeStringArray(result, result.Length + 1)
@@ -4560,6 +4561,8 @@ function LwRegisterArousalAndEyes()
     RegisterForModEvent("LivingWorld_ArousalLone", "OnLwArousalLone")
     RegisterForModEvent("LivingWorld_ArousalFade", "OnLwArousalFade")
     RegisterForModEvent("LivingWorld_EyesCovered", "OnLwEyesCovered")
+    RegisterForModEvent("LivingWorld_ArousalStep", "OnLwArousalStep") ; the Arousal power (Spell Wheel friendly)
+    _lwArousalKeyBound = 0   ; register the key again on every load: a saved "already bound" must not skip it
     LwSetArousalKey(LwArousalKey)
     _lwErect = -10        ; animation graphs start over on a load
     _lwErectShown = false
@@ -4572,13 +4575,34 @@ function LwSetArousalKey(int keyCode)
         _lwArousalKeyBound = 0
     endIf
     LwArousalKey = keyCode
-    if (keyCode > 0 && _lwArousalKeyBound != keyCode)
-        RegisterForKey(keyCode)
+    if (keyCode > 0)
+        RegisterForKey(keyCode)   ; registering again is harmless
         _lwArousalKeyBound = keyCode
     endIf
 endFunction
 
+; The "Arousal" lesser power (LWCoverEyes.esp), for VR where a keyboard key is awkward. Each cast is one
+; step up: visible (-4), then 2, then fully (9); a cast when already fully up lets it go down.
+Event OnLwArousalStep(string eventName, string strArg, float numArg, Form sender)
+    if (!LivingWorldIntimacyOn || PlayerRef.GetActorBase().GetSex() != 0)
+        return
+    endIf
+    if (_lwErect >= 9)
+        LwSetErect(-10)
+        return
+    elseIf (_lwErect < LwArousalVisibleLevel)
+        LwSetErect(LwArousalVisibleLevel)
+    elseIf (_lwErect < 2)
+        LwSetErect(2)
+    else
+        LwSetErect(9)
+    endIf
+    _lwArousalWatch += 1
+    SendModEvent("LivingWorld_ArousalFade", "", _lwArousalWatch as float)
+EndEvent
+
 function LwArousalTap()
+    Debug.Trace("[LivingWorld] arousal key: intimacy=" + LivingWorldIntimacyOn + " sex=" + PlayerRef.GetActorBase().GetSex() + " level=" + _lwErect)
     if (!LivingWorldIntimacyOn || PlayerRef.GetActorBase().GetSex() != 0)
         return   ; The New Gentleman's erection is for men
     endIf

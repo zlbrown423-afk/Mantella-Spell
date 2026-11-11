@@ -14,6 +14,8 @@ function Put($rel, $text) {
 $Quest  = "000800:$M"
 $Effect = "000801:$M"
 $Spell  = "000802:$M"
+$AEffect = "000803:$M"
+$ASpell  = "000804:$M"
 
 Put 'spriggit-meta.json' @"
 {
@@ -34,7 +36,7 @@ ModHeader:
   Stats:
     Version: 1.7
   Author: Living World
-  Description: 'A lesser power that covers your eyes (the screen goes dark, sound keeps playing). Cast again to look.'
+  Description: 'Lesser powers: Cover Your Eyes (screen goes dark, sound keeps playing) and Arousal (Living World + The New Gentleman).'
   MasterReferences:
   - Master: Skyrim.esm
     FileSize: 0
@@ -88,6 +90,53 @@ Effects:
     Duration: 1
 "@
 
+Put "MagicEffects\LWCoverEyes_ArousalEffect - 000803_$M.yaml" @"
+FormKey: $AEffect
+EditorID: LWCoverEyes_ArousalEffect
+VirtualMachineAdapter:
+  Scripts:
+  - Name: LWCoverEyes_Arousal
+    Properties:
+    - MutagenObjectType: ScriptObjectProperty
+      Name: Owner
+      Object: $Quest
+Name:
+  TargetLanguage: English
+  Value: Arousal
+MagicSkill: Alteration
+Archetype:
+  MutagenObjectType: MagicEffectArchetype
+  Type: Script
+CastType: FireAndForget
+TargetType: Self
+DualCastScale: 1
+CastingSoundLevel: Silent
+Sounds: []
+Description:
+  TargetLanguage: English
+  Value: 'Each cast: more aroused (visible, more, fully). Cast when fully aroused to calm down. Fades by itself after two minutes.'
+"@
+
+Put "Spells\LWCoverEyes_ArousalSpell - 000804_$M.yaml" @"
+FormKey: $ASpell
+EditorID: LWCoverEyes_ArousalSpell
+Name:
+  TargetLanguage: English
+  Value: Arousal
+MenuDisplayObject: 10A046:Skyrim.esm
+EquipmentType: 025BEE:Skyrim.esm
+Description:
+  TargetLanguage: English
+  Value: ''
+Type: LesserPower
+CastType: FireAndForget
+TargetType: Self
+Effects:
+- BaseEffect: $AEffect
+  Data:
+    Duration: 1
+"@
+
 # Stays running: it holds whether the eyes are covered.
 Put "Quests\LWCoverEyes_Quest - 000800_$M.yaml" @"
 FormKey: $Quest
@@ -99,6 +148,9 @@ VirtualMachineAdapter:
     - MutagenObjectType: ScriptObjectProperty
       Name: CoverEyes
       Object: $Spell
+    - MutagenObjectType: ScriptObjectProperty
+      Name: ArousalPower
+      Object: $ASpell
   Versioning:
   - Break0
   ExtraBindDataVersion: 0
