@@ -30,6 +30,7 @@ int property MantellaStartHotkey auto
 int property LivingWorldTimelineId auto        ; timeline this save is on (0 until the server answers)
 int property LivingWorldLoadNonce auto         ; random number picked at each load (0 = no load seen yet)
 float property LivingWorldLoadedGameDays auto  ; game days at that load
+string property LivingWorldWorldKey auto       ; LIVINGWORLD PATCH: the world (memories) this save belongs to, kept across a rename ("" until the server names one)
 int property MantellaListenerTextHotkey auto
 int property MantellaEndHotkey auto
 int property MantellaCustomGameEventHotkey auto
