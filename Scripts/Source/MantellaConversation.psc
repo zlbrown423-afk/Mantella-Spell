@@ -755,7 +755,11 @@ Function RaiseActionEvent(Actor speaker, int[] actionsHandles)
             ; Check for special handling (eg inventory action timing)
             if (actionIdentifier == mConsts.ACTION_NPC_INVENTORY) || (actionIdentifier == mConsts.ACTION_NPC_BARTER)
                 Utility.Wait(0.5)
-                WaitForNpcToFinishSpeaking(speaker, _lastNpcToSpeak)
+                ; LIVINGWORLD PATCH: an action-only reply (the action comes before the NPC's line) has no
+                ; speaker. Waiting then only timed out (~25 s, "NPC speaking too long") before the window opened.
+                if speaker
+                    WaitForNpcToFinishSpeaking(speaker, _lastNpcToSpeak)
+                endIf
             endIf
             
             if actionIdentifier == mConsts.KEY_REQUESTTYPE_ENDCONVERSATION
