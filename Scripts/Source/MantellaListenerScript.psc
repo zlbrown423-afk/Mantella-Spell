@@ -41,8 +41,15 @@ event OnInit()
     PlayerRef.AddSpell(MantellaRemoveNpcSpell)
     PlayerRef.AddSpell(MantellaRemoveNpcPower)
     PlayerRef.AddToFaction(repository.giafac_AllowDialogue);gia
-    repository.LivingWorldRegisterPerception() ; LIVINGWORLD PATCH
+    ; LIVINGWORLD PATCH: not right away. On a brand new game HIGGS's RegisterFor*Event natives can be called before
+    ; HIGGS is ready and never return; LivingWorldRegisterPerception holds MantellaRepository while it waits, so every
+    ; Mantella call (starting a conversation included) queued behind it for good, and the stuck stack is kept in the
+    ; save. OnUpdate does it a few seconds into the game instead.
+    _lwRegisterPending = true
+    RegisterForSingleUpdate(10.0)
 endEvent
+
+bool _lwRegisterPending = false ; LIVINGWORLD PATCH: LivingWorldRegisterPerception still owed after a new game's OnInit
 
 Function AddIngameEventToConversation(string eventText)
     If (conversation.IsRunning())
@@ -215,6 +222,7 @@ Event OnPlayerLoadGame()
     ; forget whatever happened after this save
     repository.LivingWorldLoadNonce = Utility.RandomInt(1, 2000000000)
     repository.LivingWorldLoadedGameDays = conversation.GameDaysPassed.GetValue() + 1 ; +1 because days start at 0
+    _lwRegisterPending = false ; LIVINGWORLD PATCH: done here, not again from OnUpdate
     repository.LivingWorldRegisterPerception() ; LIVINGWORLD PATCH: listen for HIGGS grabs and eating again
     repository.LivingWorldRestoreChatter() ; LIVINGWORLD PATCH: undo a chatter mute left over from before this load
     ; conversation.RegisterForConversationEvents()
@@ -321,6 +329,10 @@ function LivingWorldWatchTick()
 endFunction
 
 event OnUpdate()
+    if (_lwRegisterPending) ; LIVINGWORLD PATCH: the new game's deferred registration (see OnInit)
+        _lwRegisterPending = false
+        repository.LivingWorldRegisterPerception()
+    endIf
     repository.LivingWorldGuardBedRetry() ; LIVINGWORLD PATCH: guard careers, a pending barracks bunk
     LivingWorldWatchTick() ; LIVINGWORLD PATCH: guard careers G2e, someone comes over on the player's shift
     repository.LivingWorldJailTick() ; LIVINGWORLD PATCH: guard careers G2f, prisoners: lock up, keep in, let out
