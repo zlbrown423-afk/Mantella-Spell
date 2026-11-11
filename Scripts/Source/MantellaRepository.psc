@@ -5060,6 +5060,7 @@ function LwRegisterConfrontAndDecency()
     RegisterForModEvent("LivingWorld_Confront", "OnLwConfront")
     RegisterForModEvent("LivingWorld_Decency", "OnLwDecency")
     RegisterForModEvent("LivingWorld_Surrender", "OnLwSurrender")   ; LIVINGWORLD PATCH: the LWSaloniaSurrender plugin
+    RegisterForModEvent("LivingWorld_SurrenderReplace", "OnLwSurrenderReplace")   ; ...and its persistent copy of her
     RegisterForModEvent("LivingWorld_SideJob", "OnLwSideJob")   ; LIVINGWORLD PATCH: the plugin's side job dialogue choices
 endFunction
 
@@ -5948,6 +5949,36 @@ Event OnLwSurrender(Form survivorForm, Form husbandForm, Form guardForm, bool pl
         conv.TriggerApproachMoveAction(s)
     endIf
     s.EvaluatePackage()
+EndEvent
+
+; The plugin swapped a survivor's road-encounter reference (the game deletes it later) for a persistent copy
+; with another form ID. The copy takes her place here, and a type=rebind record (MantellaExtension
+; store/rebind.py) makes the server carry her memories and Mantella folder over to it.
+Event OnLwSurrenderReplace(Form oldForm, Form newForm)
+    Actor old = oldForm as Actor
+    Actor copy = newForm as Actor
+    if (!old || !copy || old == copy)
+        return
+    endIf
+    if (_lwSurvivors)
+        int i = _lwSurvivors.Find(old)
+        if (i >= 0)
+            _lwSurvivors[i] = copy
+        elseIf (!LwIsSurvivor(copy))
+            LwAddSurvivor(copy)
+        endIf
+    else
+        LwAddSurvivor(copy)
+    endIf
+    if (_lwSurrenderLast == old)
+        _lwSurrenderLast = copy
+    endIf
+    MantellaConversation conv = ListenerScript.conversation
+    if (conv.IsRunning() && conv.Participants.HasForm(old))
+        conv.EndConversation()   ; the next one is with the copy, who remembers it
+    endIf
+    LivingWorldQueue(LivingWorldHeader("rebind") + "|actor=" + LivingWorldActorField(copy) + "|target=" + LivingWorldActorField(old))
+    Debug.Trace("Mantella Living World: " + LwRealName(copy) + " carried over to her persistent copy")
 EndEvent
 
 bool function LwIsSurvivor(Actor a)
