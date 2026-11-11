@@ -5060,6 +5060,7 @@ function LwRegisterConfrontAndDecency()
     RegisterForModEvent("LivingWorld_Confront", "OnLwConfront")
     RegisterForModEvent("LivingWorld_Decency", "OnLwDecency")
     RegisterForModEvent("LivingWorld_Surrender", "OnLwSurrender")   ; LIVINGWORLD PATCH: the LWSaloniaSurrender plugin
+    RegisterForModEvent("LivingWorld_SideJob", "OnLwSideJob")   ; LIVINGWORLD PATCH: the plugin's side job dialogue choices
 endFunction
 
 ; The name the server knows someone by (the player by their own name).
@@ -5976,4 +5977,217 @@ function LwSurrenderSend(string eventName, Actor a)
         ModEvent.PushForm(h, a)
         ModEvent.Send(h)
     endIf
+endFunction
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; LIVINGWORLD PATCH: side jobs (MantellaExtension social/side_jobs.py, MANTELLA_LW_SALONIA_JOBS)     ;
+; A survivor (Salonia) the player sends out in Whiterun to steal or to flirt for coin. The server    ;
+; decides how it went and sends mantella_lw_side_job_do with an NPC line, one string per job:        ;
+;   job|theft or flirt|ok or caught|her name|her ref|owner|owner ref|min value|max items|gold|0|bolo  ;
+; (refs are "Plugin.esm:0x0001ABCD" or empty). Here the real goods move: up to max items worth min   ;
+; value or more from the owner (their own pack, then their shop chest), jewellery first, and any     ;
+; coin, into her pack. Never any crime gold: a caught theft is only a lookout (BOLO) the server keeps.;
+; What was really taken goes back as a job record via=loot.                                         ;
+; The LWSaloniaSurrender plugin's dialogue choices send LivingWorld_SideJob(Form her, string via,    ;
+; string task): via ask (task theft or flirt), approve (task 1, 2 or 3) or drop; queued as job records.;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+bool property LwSideJobsOn = true auto hidden
+Keyword _lwKwJewelry
+Keyword _lwKwVendorJewelry
+Keyword _lwKwGem
+
+Event OnLwSideJob(Form herForm, string via, string task)
+    Actor her = herForm as Actor
+    if (!LwSideJobsOn || !her || her.IsDead() || !LwIsSurvivor(her))
+        return
+    endIf
+    if (via != "ask" && via != "approve" && via != "drop")
+        return
+    endIf
+    string rec = LivingWorldHeader("job") + "|actor=" + LivingWorldActorField(her) + "|target=" + LivingWorldActorField(PlayerRef) + "|via=" + via
+    if (task != "")
+        rec += "|task=" + task
+    endIf
+    LivingWorldQueue(rec)
+EndEvent
+
+function LwSideJobs(string[] orders)
+    int i = 0
+    while (orders && i < orders.Length)
+        LwSideJob(orders[i])
+        i += 1
+    endWhile
+endFunction
+
+function LwSideJob(string order)
+    string[] f = StringUtil.Split(order, "|")
+    if (!f || f.Length < 11)
+        Debug.Trace("Mantella Living World side jobs: bad order " + order)
+        return
+    endIf
+    string jobId = f[0]
+    string kind = f[1]
+    string result = f[2]
+    Actor her = LwFindActor(f[3], f[4])
+    if (!her)
+        Debug.Trace("Mantella Living World side jobs: job " + jobId + ": " + f[3] + " not found")
+        return
+    endIf
+    Actor owner = None
+    if (f[5] != "Whiterun Guard")
+        owner = LwFindActor(f[5], f[6])
+    endIf
+    int minValue = f[7] as int
+    int maxItems = f[8] as int
+    int gold = f[9] as int
+    string loot = ""
+    if (result == "ok" && kind == "theft" && maxItems > 0 && owner)
+        loot = LwLift(owner, her, minValue, maxItems)
+    endIf
+    if (result == "ok" && gold > 0)
+        her.AddItem(Game.GetFormFromFile(0x0000000F, "Skyrim.esm"), gold, true)   ; Gold001
+    elseIf (result != "ok")
+        gold = 0
+    endIf
+    Debug.Trace("Mantella Living World side jobs: job " + jobId + " (" + kind + ", " + result + "): took [" + loot + "], " + gold + " gold")
+    LivingWorldQueue(LivingWorldHeader("job") + "|actor=" + LivingWorldActorField(her) + "|via=loot|task=" + jobId + "|loot=" + loot + "|gold=" + gold)
+endFunction
+
+; Up to maxItems things worth minValue or more, jewellery and gems first: the owner's own pack (never
+; what they wear), then the chest of any shop they run. Returns "Name:value;Name:value".
+string function LwLift(Actor owner, Actor her, int minValue, int maxItems)
+    string loot = ""
+    int taken = 0
+    int pass = 0
+    ObjectReference[] sources = new ObjectReference[4]
+    sources[0] = owner
+    int n = 1
+    Faction[] factions = owner.GetFactions(0, 127)
+    int k = 0
+    while (factions && k < factions.Length && n < 4)
+        ObjectReference chest = None
+        if (factions[k])
+            chest = factions[k].GetMerchantContainer()
+        endIf
+        if (chest && sources.Find(chest) < 0)
+            sources[n] = chest
+            n += 1
+        endIf
+        k += 1
+    endWhile
+    while (pass < 2 && taken < maxItems)   ; pass 0: jewellery and gems only; pass 1: anything worth it
+        int s = 0
+        while (s < n && taken < maxItems)
+            ObjectReference src = sources[s]
+            int count = src.GetNumItems()
+            int i = count - 1
+            while (i >= 0 && taken < maxItems)
+                Form item = src.GetNthForm(i)
+                if (item && LwWorthLifting(item, src, owner, minValue, pass == 0))
+                    string name = LwCleanName(item.GetName())
+                    int value = item.GetGoldValue()
+                    src.RemoveItem(item, 1, true, her)
+                    if (loot != "")
+                        loot += ";"
+                    endIf
+                    loot += name + ":" + value
+                    taken += 1
+                endIf
+                i -= 1
+            endWhile
+            s += 1
+        endWhile
+        pass += 1
+    endWhile
+    return loot
+endFunction
+
+bool function LwWorthLifting(Form item, ObjectReference src, Actor owner, int minValue, bool jewelleryOnly)
+    if (item.GetGoldValue() < minValue || item.GetName() == "" || item.GetFormID() == 0x0000000F)
+        return false
+    endIf
+    if (item as Key || item as Book)
+        return false   ; keys and notes can be quest items; leave them
+    endIf
+    if (src == owner && (owner.IsEquipped(item)))
+        return false   ; never what they are wearing
+    endIf
+    if (jewelleryOnly)
+        if (!_lwKwJewelry)
+            _lwKwJewelry = Keyword.GetKeyword("ArmorJewelry")
+            _lwKwVendorJewelry = Keyword.GetKeyword("VendorItemJewelry")
+            _lwKwGem = Keyword.GetKeyword("VendorItemGem")
+        endIf
+        return (_lwKwJewelry && item.HasKeyword(_lwKwJewelry)) || (_lwKwVendorJewelry && item.HasKeyword(_lwKwVendorJewelry)) || (_lwKwGem && item.HasKeyword(_lwKwGem))
+    endIf
+    return item as Armor || item as Weapon || item as Potion || item as MiscObject || item as Ingredient || item as SoulGem
+endFunction
+
+string function LwCleanName(string s)
+    ; the record uses | ; : and = as separators
+    string out = ""
+    int i = 0
+    int len = StringUtil.GetLength(s)
+    while (i < len)
+        string c = StringUtil.GetNthChar(s, i)
+        if (c != "|" && c != ";" && c != ":" && c != "=")
+            out += c
+        endIf
+        i += 1
+    endWhile
+    return out
+endFunction
+
+; By ref ("Plugin.esm:0x0001ABCD") first, then by name among survivors, the conversation and people nearby.
+Actor function LwFindActor(string name, string ref)
+    if (ref != "")
+        int colon = StringUtil.Find(ref, ":0x")
+        if (colon > 0)
+            string plugin = StringUtil.Substring(ref, 0, colon)
+            int localId = LwHex(StringUtil.Substring(ref, colon + 3))
+            if (localId > 0)
+                Actor byRef = Game.GetFormFromFile(localId, plugin) as Actor   ; None when the plugin is not loaded
+                if (byRef)
+                    return byRef
+                endIf
+            endIf
+        endIf
+    endIf
+    int i = 0
+    while (_lwSurvivors && i < _lwSurvivors.Length)
+        if (_lwSurvivors[i] && LwRealName(_lwSurvivors[i]) == name)
+            return _lwSurvivors[i]
+        endIf
+        i += 1
+    endWhile
+    Actor inConv = ListenerScript.conversation.GetActorByName(name)
+    if (inConv)
+        return inConv
+    endIf
+    Actor[] near = ListenerScript.ScanNearbyActors()
+    i = 0
+    while (near && i < near.Length)
+        if (near[i] && LwRealName(near[i]) == name)
+            return near[i]
+        endIf
+        i += 1
+    endWhile
+    return None
+endFunction
+
+int function LwHex(string s)
+    string digits = "0123456789ABCDEF0123456789abcdef"
+    int value = 0
+    int i = 0
+    int len = StringUtil.GetLength(s)
+    while (i < len)
+        int d = StringUtil.Find(digits, StringUtil.GetNthChar(s, i))
+        if (d < 0)
+            return value
+        endIf
+        value = value * 16 + (d % 16)
+        i += 1
+    endWhile
+    return value
 endFunction
