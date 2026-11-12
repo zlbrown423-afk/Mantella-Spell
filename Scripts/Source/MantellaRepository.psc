@@ -6725,7 +6725,7 @@ bool function LwTouchCovers(string kind, string base)
     elseIf (base == "")
         return kind == "hug"
     elseIf (kind == "hug")
-        return base == "upper back" || base == "lower back" || base == "side" || base == "shoulder" || base == "upper arm" || base == "stomach" || base == "head"
+        return base == "upper back" || base == "lower back" || base == "side" || base == "hip" || base == "shoulder" || base == "upper arm" || base == "stomach" || base == "head" || base == "neck"   ; hands drift there in a hug
     elseIf (kind == "hands")
         return base == "hand" || base == "forearm"
     elseIf (kind == "back")
