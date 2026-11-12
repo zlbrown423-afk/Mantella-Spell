@@ -193,6 +193,9 @@ function ContinueConversation(string nextAction, int handle)
         if(SKSE_HTTP.hasKey(handle, "mantella_lw_gestures_on")) ; LIVINGWORLD PATCH: VR gestures (BL2) on or off
             repository.LivingWorldSetGestures(SKSE_HTTP.getBool(handle, "mantella_lw_gestures_on", true), SKSE_HTTP.getBool(handle, "mantella_lw_gesture_notices", true))
         endif
+        if(SKSE_HTTP.hasKey(handle, "mantella_lw_handshake_on")) ; LIVINGWORLD PATCH: handshake, salute and adult gestures, each its own switch
+            repository.LivingWorldSetGestureGroups(SKSE_HTTP.getBool(handle, "mantella_lw_handshake_on", true), SKSE_HTTP.getBool(handle, "mantella_lw_salute_on", true), SKSE_HTTP.getBool(handle, "mantella_lw_adult_gestures_on", false))
+        endif
         if(SKSE_HTTP.hasKey(handle, "mantella_lw_intimacy_on")) ; LIVINGWORLD PATCH: intimate scenes (OStim) on or off
             repository.LivingWorldIntimacyOn = SKSE_HTTP.getBool(handle, "mantella_lw_intimacy_on", true)
         endif

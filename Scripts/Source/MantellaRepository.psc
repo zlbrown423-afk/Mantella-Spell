@@ -1998,7 +1998,11 @@ Event OnUpdate()
     endIf
     if (LwGesturesActive() && now >= _lwgDueAt && !Utility.IsInMenuMode() && !PlayerRef.IsInCombat())
         LwGestureTick(now)
-        _lwgDueAt = Utility.GetCurrentRealTime() + _lwgInterval
+        if (_lwgQuick)   ; LIVINGWORLD PATCH: a hand at the groin is sampled faster, so strokes are not missed
+            _lwgDueAt = Utility.GetCurrentRealTime() + LwStrokeSampleSeconds
+        else
+            _lwgDueAt = Utility.GetCurrentRealTime() + _lwgInterval
+        endIf
     endIf
     LwScheduleNext(now)
 EndEvent
@@ -3884,6 +3888,10 @@ function LwBodyRelease(int i)
         if (_lwbArmsUntil[i] > 0.0)
             Debug.SendAnimationEvent(a, "OffsetStop")
         endIf
+        if (a == _lwgLookActor)   ; LIVINGWORLD PATCH: eyes following a point down
+            a.ClearLookAt()
+            _lwgLookActor = None
+        endIf
     endIf
     _lwbActors[i] = None
     _lwbInside[i] = false
@@ -5659,13 +5667,14 @@ function LwGestureReset()
     _lwgCostSum = 0.0
     _lwgCostN = 0
     _lwgSlowed = false
+    LwGesture2Reset()
     if (!_lwgVrik)
         Debug.Trace("Mantella Living World: VRIK not found; gestures are off")
     endIf
 endFunction
 
 bool function LwGesturesActive()
-    return LivingWorldGesturesOn && LivingWorldBodyLanguageOn && _lwgVrik && _lwbWatching
+    return (LivingWorldGesturesOn || LivingWorldHandshakeOn || LivingWorldSaluteOn || LivingWorldAdultGesturesOn) && LivingWorldBodyLanguageOn && _lwgVrik && _lwbWatching
 endFunction
 
 ; The start reply's switches (mantella_lw_gestures_on, mantella_lw_gesture_notices).
@@ -5893,6 +5902,21 @@ function LwGestureTick(float now)
     bool free = !PlayerRef.IsWeaponDrawn() && !HiggsVR.GetGrabbedObject(false)
     MantellaConversation conv = ListenerScript.conversation
     bool talking = conv && conv.IsRunning()
+    bool grip = free && VRIK.VrikIsGripPressed(false)
+    bool triggerTouched = false
+    if (grip)
+        triggerTouched = VRIK.VrikIsTriggerTouched(false)
+    endIf
+
+    ; LIVINGWORLD PATCH: handshake, salute and the adult gestures (each its own switch; see LwGesture2Reset)
+    if (LwGesture2Tick(now, hx, hy, hz, ex, ey, ez, reach, free, grip, triggerTouched))
+        LwGestureCost(t0)
+        return
+    endIf
+    if (!LivingWorldGesturesOn)   ; the BL2 set (MANTELLA_LW_GESTURES) is off: the rest is not looked for
+        LwGestureCost(t0)
+        return
+    endIf
 
     ; hands up: both hands above the head for about a second
     if (hz > 6.0 && lz > 6.0)
@@ -5940,12 +5964,6 @@ function LwGestureTick(float now)
         LwGesture("wave", None)
         LwGestureCost(t0)
         return
-    endIf
-
-    bool grip = free && VRIK.VrikIsGripPressed(false)
-    bool triggerTouched = false
-    if (grip)
-        triggerTouched = VRIK.VrikIsTriggerTouched(false)
     endIf
 
     ; thumbs up or down: grip and trigger held, the thumb off the stick and buttons and upright
@@ -6057,6 +6075,423 @@ function LwGestureCost(float t0)
         if (LivingWorldGestureNotices)
             Debug.Notification("Gestures switched off: too slow on this game")
         endIf
+    endIf
+endFunction
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; LIVINGWORLD PATCH: handshake, salute and adult gestures                                            ;
+; Read in the same VRIK tick as the BL2 gestures, right hand only, each group behind its own switch   ;
+; from the server's start reply (MantellaExtension livingworld/bodylang):                             ;
+; - handshake (MANTELLA_LW_HANDSHAKE, on): an open hand (grip let go) held out still toward someone    ;
+;   within LwHandshakeMeters at about waist height. Someone willing (not hostile, not disliking the    ;
+;   player, not guarded, not fighting, sitting or in a scene) holds out theirs (IdleGive, Skyrim.esm   ;
+;   0x0B5E20: Skyrim has no handshake animation, this is an arm held out), and for LwHandshakeSeconds  ;
+;   a HIGGS hold on their hand counts as an agreed handshake (consent=handshake), not a grab.           ;
+; - salute (MANTELLA_LW_SALUTE, on): a flat hand at the brow, or a fist over the heart, held still.    ;
+;   A guard returns it (IdleSalute, Skyrim.esm 0x0B240C).                                              ;
+; - adult (MANTELLA_LW_ADULT_GESTURES, off unless 1): a closed hand making a repeated stroking motion   ;
+;   at the player's own groin (LwStrokesPerInstance strokes make one), and the index finger pointing    ;
+;   down at it, which the faced NPC's eyes follow for a moment. Adults only (LivingWorldIsPerson skips   ;
+;   children), never during an intimate scene. They only tell the NPC what happened: nothing is started ;
+;   or agreed because of them, and how the NPC takes it is theirs (the server's prompt).                ;
+; All are type=presence records to the NPC the player faces, with cooldowns, like the BL2 gestures.    ;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+bool property LivingWorldHandshakeOn = true auto hidden        ; mantella_lw_handshake_on
+bool property LivingWorldSaluteOn = true auto hidden           ; mantella_lw_salute_on
+bool property LivingWorldAdultGesturesOn = false auto hidden   ; mantella_lw_adult_gestures_on (off unless the server says so)
+float property LwHandshakeMeters = 1.8 auto hidden
+float property LwHandshakeSeconds = 8.0 auto hidden            ; how long their held-out hand may be taken
+float property LwStrokeZone = 22.0 auto hidden                 ; game units from the groin (about 30 cm)
+float property LwStrokeMinStep = 1.4 auto hidden               ; a move this long (about 2 cm) counts
+int property LwStrokesPerInstance = 5 auto hidden
+float property LwStrokeSampleSeconds = 0.08 auto hidden        ; sampling while the hand is at the groin
+float property LwPointDownLookSeconds = 2.0 auto hidden
+
+Idle _lwgHandIdle
+Idle _lwgSaluteIdle
+Actor _lwgHandActor          ; held out their hand to the player's until _lwgHandUntil
+float _lwgHandUntil = 0.0
+int _lwgHandTicks = 0
+float _lwgLastHandshake = -100.0
+string _lwgSaluteStyle = ""
+int _lwgSaluteTicks = 0
+float _lwgLastSalute = -100.0
+bool _lwgQuick = false
+int _lwsTurns = 0            ; stroking: direction changes in a row (two per stroke)
+bool _lwsHave = false
+bool _lwsMoved = false
+float _lwsPx = 0.0
+float _lwsPy = 0.0
+float _lwsPz = 0.0
+float _lwsDx = 0.0
+float _lwsDy = 0.0
+float _lwsDz = 0.0
+float _lwsLastTurnAt = 0.0
+int _lwsSets = 0
+float _lwsLastSetAt = -100.0
+float _lwgLastStroke = -100.0
+int _lwgPdTicks = 0
+float _lwgLastPointDown = -100.0
+Actor _lwgLookActor
+float _lwgLookUntil = 0.0
+
+; From LwGestureReset, on every load.
+function LwGesture2Reset()
+    _lwgHandIdle = Game.GetFormFromFile(0x000B5E20, "Skyrim.esm") as Idle     ; IdleGive
+    _lwgSaluteIdle = Game.GetFormFromFile(0x000B240C, "Skyrim.esm") as Idle   ; IdleSalute
+    _lwgHandActor = None
+    _lwgHandUntil = 0.0
+    _lwgHandTicks = 0
+    _lwgSaluteTicks = 0
+    _lwgSaluteStyle = ""
+    _lwgQuick = false
+    _lwsTurns = 0
+    _lwsHave = false
+    _lwsMoved = false
+    _lwsSets = 0
+    _lwgPdTicks = 0
+    if (_lwgLookActor)
+        _lwgLookActor.ClearLookAt()
+    endIf
+    _lwgLookActor = None
+endFunction
+
+; The start reply's switches (mantella_lw_handshake_on, mantella_lw_salute_on, mantella_lw_adult_gestures_on).
+function LivingWorldSetGestureGroups(bool handshake, bool salute, bool adult)
+    bool wasActive = LivingWorldGesturesOn || LivingWorldHandshakeOn || LivingWorldSaluteOn || LivingWorldAdultGesturesOn
+    LivingWorldHandshakeOn = handshake
+    LivingWorldSaluteOn = salute
+    LivingWorldAdultGesturesOn = adult
+    if (!adult)
+        _lwsTurns = 0
+        _lwgQuick = false
+        LwgLookEnd()
+    endIf
+    if (!wasActive && (handshake || salute || adult) && !_lwProbeOn)
+        _lwgN = 0
+        LwScheduleNext(Utility.GetCurrentRealTime())
+    endIf
+endFunction
+
+; One tick of these gestures. True when one was recognised (the caller stops there).
+bool function LwGesture2Tick(float now, float hx, float hy, float hz, float ex, float ey, float ez, float reach, bool free, bool grip, bool triggerTouched)
+    LwgLookStep(now)
+    _lwgQuick = false
+    if (LivingWorldAdultGesturesOn && free && !(_lwScAny && LwInScene(PlayerRef) >= 0))
+        if (hz < -25.0)   ; the hand is low enough to be near the groin: only then are the body's nodes read
+            float[] g = new float[3]
+            if (LwgGroin(g))
+                if (LwgStrokeStep(now, hx + ex - g[0], hy + ey - g[1], hz + ez - g[2], grip))
+                    return true
+                endIf
+                if (LwgPointDownStep(now, g, grip, triggerTouched))
+                    return true
+                endIf
+            endIf
+        else
+            _lwsHave = false
+            _lwgPdTicks = 0
+        endIf
+    endIf
+
+    ; handshake: an open hand held out still toward someone close, at about waist height
+    Actor to = None
+    if (LivingWorldHandshakeOn && free && !grip && hz > -75.0 && hz < -20.0 && reach > 26.0)
+        to = LwgAddressee()
+        if (to && to.GetDistance(PlayerRef) <= LwHandshakeMeters * 71.0210 && LwgHandToward(to, hx, hy, ex, ey))
+            _lwgHandTicks += 1
+        else
+            _lwgHandTicks = 0
+        endIf
+    else
+        _lwgHandTicks = 0
+    endIf
+    if (_lwgHandTicks >= 4 && now - _lwgLastHandshake >= 20.0 && LwgNet(0, 4) < 3.0)
+        _lwgLastHandshake = now
+        _lwgHandTicks = 0
+        LwGestureHandshake(to, now)
+        return true
+    endIf
+
+    ; salute: a flat hand at the brow, or a fist over the heart, held still
+    string style = ""
+    if (LivingWorldSaluteOn && free)
+        float toHead = Math.sqrt(hx * hx + hy * hy + hz * hz)
+        if (!grip && hz > -10.0 && hz < 12.0 && toHead < 24.0)
+            style = "brow"
+        elseIf (grip && hz > -42.0 && hz < -16.0 && reach < 18.0)
+            style = "chest"
+        endIf
+    endIf
+    if (style != "" && style == _lwgSaluteStyle)
+        _lwgSaluteTicks += 1
+    elseIf (style != "")
+        _lwgSaluteTicks = 1
+    else
+        _lwgSaluteTicks = 0
+    endIf
+    _lwgSaluteStyle = style
+    if (_lwgSaluteTicks >= 3 && now - _lwgLastSalute >= 20.0 && LwgNet(0, 3) < 2.5)
+        Actor saluted = LwgAddressee()
+        if (saluted)
+            _lwgLastSalute = now
+            _lwgSaluteTicks = 0
+            LwGestureSalute(saluted, style)
+            return true
+        endIf
+    endIf
+    return false
+endFunction
+
+; Where the player's groin is: The New Gentleman's bone if there is one, else the pelvis.
+bool function LwgGroin(float[] g)
+    if (NetImmerse.HasNode(PlayerRef, "NPC GenitalsBase [GenBase]", false))
+        return NetImmerse.GetNodeWorldPosition(PlayerRef, "NPC GenitalsBase [GenBase]", g, false)
+    endIf
+    return NetImmerse.GetNodeWorldPosition(PlayerRef, "NPC Pelvis [Pelv]", g, false)
+endFunction
+
+; The hand (relative to the headset) points toward this person, seen from above.
+bool function LwgHandToward(Actor a, float hx, float hy, float ex, float ey)
+    float ax = a.GetPositionX() - ex
+    float ay = a.GetPositionY() - ey
+    float alen = Math.sqrt(ax * ax + ay * ay)
+    float hlen = Math.sqrt(hx * hx + hy * hy)
+    if (alen < 1.0 || hlen < 1.0)
+        return false
+    endIf
+    return (ax * hx + ay * hy) / (alen * hlen) > 0.75
+endFunction
+
+; Stroking: the closed hand within LwStrokeZone of the groin, moving back and forth. Every change of direction
+; (a move of at least LwStrokeMinStep against the last one) is half a stroke; a pause of 1.5 s starts again.
+bool function LwgStrokeStep(float now, float rx, float ry, float rz, bool grip)
+    if (!grip || rx * rx + ry * ry + rz * rz > LwStrokeZone * LwStrokeZone)
+        _lwsHave = false
+        _lwsMoved = false
+        return false
+    endIf
+    _lwgQuick = true
+    if (!_lwsHave)
+        _lwsPx = rx
+        _lwsPy = ry
+        _lwsPz = rz
+        _lwsHave = true
+        _lwsLastTurnAt = now
+        return false
+    endIf
+    float dx = rx - _lwsPx
+    float dy = ry - _lwsPy
+    float dz = rz - _lwsPz
+    float len = Math.sqrt(dx * dx + dy * dy + dz * dz)
+    if (len >= LwStrokeMinStep)
+        if (_lwsMoved && dx * _lwsDx + dy * _lwsDy + dz * _lwsDz < 0.0)
+            _lwsTurns += 1
+            _lwsLastTurnAt = now
+        endIf
+        _lwsDx = dx
+        _lwsDy = dy
+        _lwsDz = dz
+        _lwsMoved = true
+        _lwsPx = rx   ; the next move is measured from here (a slow stroke still adds up)
+        _lwsPy = ry
+        _lwsPz = rz
+    endIf
+    if (now - _lwsLastTurnAt > 1.5)
+        _lwsTurns = 0
+        _lwsLastTurnAt = now
+    endIf
+    if (_lwsTurns < 2 * LwStrokesPerInstance)
+        return false
+    endIf
+    _lwsTurns = 0
+    if (now - _lwsLastSetAt > 20.0)
+        _lwsSets = 0
+    endIf
+    _lwsSets += 1
+    _lwsLastSetAt = now
+    if (now - _lwgLastStroke < 10.0)
+        return false
+    endIf
+    _lwgLastStroke = now
+    LwGestureAdult("stroke", "|n=" + _lwsSets)
+    return true
+endFunction
+
+; Pointing down at the groin: index finger out (grip held, trigger let go), pointing down, its line passing
+; the groin from more than a hand's width away, for three samples.
+bool function LwgPointDownStep(float now, float[] g, bool grip, bool triggerTouched)
+    if (!grip || triggerTouched)
+        _lwgPdTicks = 0
+        return false
+    endIf
+    float[] b = new float[3]
+    float[] t = new float[3]
+    if (!NetImmerse.GetNodeWorldPosition(PlayerRef, "NPC R Finger10 [RF10]", b, true) || !NetImmerse.GetNodeWorldPosition(PlayerRef, "NPC R Finger12 [RF12]", t, true))
+        _lwgPdTicks = 0
+        return false
+    endIf
+    float dx = t[0] - b[0]
+    float dy = t[1] - b[1]
+    float dz = t[2] - b[2]
+    float len = Math.sqrt(dx * dx + dy * dy + dz * dz)
+    float gx = g[0] - t[0]
+    float gy = g[1] - t[1]
+    float gz = g[2] - t[2]
+    float glen = Math.sqrt(gx * gx + gy * gy + gz * gz)
+    if (len >= 0.5 && glen > 7.0 && glen < 60.0 && dz < -0.5 * len && (dx * gx + dy * gy + dz * gz) / (len * glen) > 0.8)
+        _lwgPdTicks += 1
+    else
+        _lwgPdTicks = 0
+    endIf
+    if (_lwgPdTicks < 3 || now - _lwgLastPointDown < 15.0)
+        return false
+    endIf
+    _lwgLastPointDown = now
+    _lwgPdTicks = 0
+    LwGestureAdult("point_down", "")
+    return true
+endFunction
+
+; An adult gesture to whoever the player faces (an adult; never during a scene). Point down draws their eyes.
+function LwGestureAdult(string what, string extra)
+    _lwgN = 0
+    Actor to = LwgAddressee()
+    if (!to || !LivingWorldIsPerson(to) || (_lwScAny && LwInScene(to) >= 0))
+        if (LivingWorldGestureNotices)
+            Debug.Notification("Gesture: " + what + " (nobody facing you)")
+        endIf
+        return
+    endIf
+    float d = to.GetDistance(PlayerRef) / 71.0210
+    if (!_lwPlayerCovered)
+        extra += "|naked=1"
+    endIf
+    if (what == "point_down" && !to.IsInCombat() && to.HasLOS(PlayerRef) && LwPeekMarkerFollow())
+        LwgLookEnd()
+        to.SetLookAt(_lwPeekMarker)
+        _lwgLookActor = to
+        _lwgLookUntil = Utility.GetCurrentRealTime() + LwPointDownLookSeconds
+    endIf
+    LwBodyRecord(to, what, extra + "|dist=" + d)
+    if (LivingWorldGestureNotices)
+        Debug.Notification("Gesture: " + what + " to " + to.GetDisplayName())
+    endIf
+endFunction
+
+; Eyes on the point: follow it while it lasts, then back to the player's face (in a conversation) or free.
+function LwgLookStep(float now)
+    if (!_lwgLookActor)
+        return
+    endIf
+    if (now >= _lwgLookUntil || !_lwgLookActor.Is3DLoaded())
+        LwgLookEnd()
+        return
+    endIf
+    LwPeekMarkerFollow()
+endFunction
+
+function LwgLookEnd()
+    Actor a = _lwgLookActor
+    if (!a)
+        return
+    endIf
+    _lwgLookActor = None
+    MantellaConversation conv = ListenerScript.conversation
+    int slot = -1
+    if (_lwbActors)
+        slot = _lwbActors.Find(a)
+    endIf
+    if ((conv && conv.IsRunning() && conv.Participants.HasForm(a)) || (slot >= 0 && _lwbLookHeld[slot]))
+        a.SetLookAt(PlayerRef)
+    else
+        a.ClearLookAt()
+    endIf
+endFunction
+
+; Someone who would shake the player's hand right now.
+bool function LwHandshakeWilling(Actor a)
+    if (!LivingWorldIsPerson(a) || a.IsInCombat() || a.GetSitState() != 0 || a.IsOnMount() || a.IsUnconscious() || a.IsBleedingOut() || a.IsHostileToActor(PlayerRef))
+        return false
+    endIf
+    if ((_lwScAny && LwInScene(a) >= 0) || a.GetRelationshipRank(PlayerRef) < 0)
+        return false
+    endIf
+    int slot = -1
+    if (_lwbActors)
+        slot = _lwbActors.Find(a)
+    endIf
+    return slot < 0 || _lwbGuard[slot] < 0.6   ; guarded (wary, irritated, afraid) people keep their hands to themselves
+endFunction
+
+function LwGestureHandshake(Actor to, float now)
+    _lwgN = 0
+    if (!to)
+        return
+    endIf
+    bool back = LwHandshakeWilling(to)
+    string extra = "|back=0"
+    if (back)
+        extra = "|back=1"
+        if (_lwgHandIdle)
+            to.PlayIdle(_lwgHandIdle)
+        endIf
+        _lwgHandActor = to
+        _lwgHandUntil = Utility.GetCurrentRealTime() + LwHandshakeSeconds
+        LwTouchBrief(to, "hands", LwHandshakeSeconds)
+    endIf
+    LwBodyRecord(to, "handshake", extra + "|dist=" + (to.GetDistance(PlayerRef) / 71.0210))
+    if (LivingWorldGestureNotices)
+        if (back)
+            Debug.Notification("Gesture: handshake, " + to.GetDisplayName() + " holds out a hand")
+        else
+            Debug.Notification("Gesture: handshake, " + to.GetDisplayName() + " does not take it")
+        endIf
+    endIf
+endFunction
+
+; A short agreement of one kind for someone who just offered it with a gesture (their own held-out hand).
+; Added to an agreement they already have; never pushes anyone else's out.
+function LwTouchBrief(Actor a, string kind, float seconds)
+    if (!LivingWorldTouchOn || !_lwtActors || !a)
+        return
+    endIf
+    int i = LwTouchFind(a)
+    if (i >= 0)
+        if (!LwTouchHasKind(i, kind) && !LwTouchHasKind(i, "anywhere"))
+            _lwtKinds[i] = _lwtKinds[i] + "," + kind
+        endIf
+        return
+    endIf
+    i = _lwtActors.Find(None)
+    if (i < 0)
+        return
+    endIf
+    _lwtActors[i] = a
+    _lwtKinds[i] = kind
+    _lwtUntil[i] = Utility.GetCurrentRealTime() + seconds
+    _lwtAny = true
+    LwTouchPlanck(a, true)
+endFunction
+
+function LwGestureSalute(Actor to, string style)
+    _lwgN = 0
+    bool back = LivingWorldIsPerson(to) && to.IsGuard() && !to.IsInCombat() && !to.IsHostileToActor(PlayerRef) && to.GetSitState() == 0 && !to.IsOnMount() && !(_lwScAny && LwInScene(to) >= 0)
+    string extra = "|style=" + style + "|back=0"
+    if (back)
+        extra = "|style=" + style + "|back=1"
+        if (_lwgSaluteIdle)
+            to.PlayIdle(_lwgSaluteIdle)
+        endIf
+    endIf
+    LwBodyRecord(to, "salute", extra + "|dist=" + (to.GetDistance(PlayerRef) / 71.0210))
+    if (LivingWorldGestureNotices)
+        string text = "Gesture: salute to " + to.GetDisplayName()
+        if (back)
+            text += ", returned"
+        endIf
+        Debug.Notification(text)
     endIf
 endFunction
 
@@ -6753,6 +7188,9 @@ string function LwTouchHoldStatus(Actor target, string area, bool final)
         return ""
     endIf
     string kind = LwTouchKind(target, area)
+    if (kind == "hands" && target == _lwgHandActor && Utility.GetCurrentRealTime() < _lwgHandUntil)
+        return "handshake"   ; LIVINGWORLD PATCH: the hand they held out to the player's offered one
+    endIf
     if (kind != "")
         return kind
     endIf
@@ -6787,6 +7225,8 @@ string function LwTouchLine(Actor target, string touch, string part, float secon
         did = p + " hugged " + who
     elseIf (touch == "hands")
         did = p + " held " + who + "'s hand"
+    elseIf (touch == "handshake")
+        did = p + " shook hands with " + who
     elseIf (touch == "back")
         did = p + " rubbed " + who + "'s back"
     elseIf (touch == "butt")
