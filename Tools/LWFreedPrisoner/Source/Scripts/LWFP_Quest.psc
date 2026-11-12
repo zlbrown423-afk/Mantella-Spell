@@ -29,7 +29,7 @@ Float Property Poll = 4.0 AutoReadOnly
 Float Property DayStart = 8.0 AutoReadOnly    ; 8 am: off to the inn
 Float Property DayEnd = 21.0 AutoReadOnly     ; 9 pm: home to sleep
 
-Int State   ; 0 = never followed yet (still the keep's prisoner), 1 = following, 2 = staying in Whiterun
+Int Mode   ; 0 = never followed yet (still the keep's prisoner), 1 = following, 2 = staying in Whiterun
 
 Event OnInit()
 	Log("Started")
@@ -55,19 +55,19 @@ Function Tick()
 	EndIf
 	Bool following = her.GetFactionRank(FollowingFaction) >= 1
 	If following
-		If State != 1
-			State = 1
+		If Mode != 1
+			Mode = 1
 			LWFP_StayHome.SetValueInt(0)
 			her.SetPlayerTeammate(True)
 			her.EvaluatePackage()
 			Log("Following the player")
 		EndIf
-	ElseIf State == 1
-		State = 2
+	ElseIf Mode == 1
+		Mode = 2
 		her.SetPlayerTeammate(False)
 		LWFP_StayHome.SetValueInt(1)
 		PlaceHer(her, True)
-	ElseIf State == 2
+	ElseIf Mode == 2
 		PlaceHer(her, False)
 	EndIf
 EndFunction
