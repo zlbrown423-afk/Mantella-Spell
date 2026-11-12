@@ -27,5 +27,11 @@ event OnNpcCancelTravelAdvancedActionReceived(Form speaker)
         i += 1
     EndWhile
 
+    ; LIVINGWORLD PATCH: LeadTo lives on its own quest, so cancelling travel never stopped a leader
+    MantellaAdvancedAction_LeadTo leadQuest = Game.GetFormFromFile(0x339B8E, "Mantella.esp") as MantellaAdvancedAction_LeadTo
+    if leadQuest
+        leadQuest.StopLeading("travel cancelled")
+    endIf
+
     Debug.Notification("Travel plans cancelled.")
 endEvent
