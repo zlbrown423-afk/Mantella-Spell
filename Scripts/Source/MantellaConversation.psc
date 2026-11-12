@@ -214,6 +214,9 @@ function ContinueConversation(string nextAction, int handle)
         if(SKSE_HTTP.hasKey(handle, "mantella_lw_peek_on")) ; LIVINGWORLD PATCH: women's glances at a naked player (MANTELLA_LW_PEEK)
             repository.LwPeekOn = SKSE_HTTP.getBool(handle, "mantella_lw_peek_on", true)
         endIf
+        if(SKSE_HTTP.hasKey(handle, "mantella_lw_touch_on")) ; LIVINGWORLD PATCH: touch consent (MANTELLA_LW_TOUCH_CONSENT)
+            repository.LivingWorldTouchSet(SKSE_HTTP.getBool(handle, "mantella_lw_touch_on", true))
+        endIf
         if(SKSE_HTTP.hasKey(handle, "mantella_lw_arousal_key")) ; LIVINGWORLD PATCH: the arousal key (MANTELLA_LW_AROUSAL_KEY)
             repository.LwSetArousalKey(SKSE_HTTP.getInt(handle, "mantella_lw_arousal_key", 76))
         endif
@@ -429,6 +432,12 @@ function ProcessNpcSpeak(int handle)
     if(SKSE_HTTP.hasKey(handle, "mantella_lw_guard_release")) ; LIVINGWORLD PATCH: guard careers G2f, prisoners let out
         repository.LivingWorldRelease(SKSE_HTTP.getIntArray(handle, "mantella_lw_guard_release"))
     endif
+    if(SKSE_HTTP.hasKey(handle, "mantella_lw_touch_allow")) ; LIVINGWORLD PATCH: touch consent, what an NPC just agreed to
+        repository.LivingWorldTouchAllow(SKSE_HTTP.getStringArray(handle, "mantella_lw_touch_allow"), self)
+    endif
+    if(SKSE_HTTP.hasKey(handle, "mantella_lw_touch_withdraw")) ; LIVINGWORLD PATCH: touch consent, taken back
+        repository.LivingWorldTouchWithdraw(SKSE_HTTP.getStringArray(handle, "mantella_lw_touch_withdraw"), self)
+    endif
     if(SKSE_HTTP.hasKey(handle, "mantella_lw_fine_gold")) ; LIVINGWORLD PATCH: a guard's fine for public nakedness, paid on the spot
         repository.LwPayFine(GetActorByName(SKSE_HTTP.getString(handle, "mantella_lw_fine_guard", "")), SKSE_HTTP.getInt(handle, "mantella_lw_fine_gold", 0))
     endif
@@ -597,6 +606,7 @@ Function CleanupConversation()
     endIf 
     MantellaVanillaDialogue.notifyConversationEnd()
     repository.LivingWorldRestoreChatter() ; LIVINGWORLD PATCH: vanilla hellos and idle chatter back on
+    repository.LwTouchConversationEnded() ; LIVINGWORLD PATCH: touch consent, agreements run out a few minutes from now
     Debug.Notification("Conversation ended.")  
     Stop()
 EndFunction

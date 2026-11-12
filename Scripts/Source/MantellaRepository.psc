@@ -353,6 +353,8 @@ string _lwLeftNode
 string _lwRightNode
 string _lwLeftArea
 string _lwRightArea
+string _lwLeftTouch    ; LIVINGWORLD PATCH: touch consent, this hold: the kind agreed to, "breach:<kinds>", or ""
+string _lwRightTouch
 float _lwPx
 float _lwPy
 float _lwPz
@@ -447,12 +449,14 @@ Event OnObjectGrabbed(ObjectReference akRef, bool abIsLeft)
         _lwLeftNode = ""
         _lwLeftArea = ""
         _lwLeftReacted = false
+        _lwLeftTouch = LwTouchHoldStatus(target, "", false)
     else
         _lwRightHeld = target
         _lwRightSince = now
         _lwRightNode = ""
         _lwRightArea = ""
         _lwRightReacted = false
+        _lwRightTouch = LwTouchHoldStatus(target, "", false)
     endIf
     if (LivingWorldReactOn)
         SendModEvent("LivingWorld_HoldCheck") ; still holding on in a few seconds: they speak up
@@ -481,9 +485,11 @@ Event OnObjectGrabbed(ObjectReference akRef, bool abIsLeft)
     if (abIsLeft && _lwLeftHeld == target && _lwLeftSince == now)
         _lwLeftArea = area
         _lwPLGrabMs = (Utility.GetCurrentRealTime() - now) * 1000.0
+        _lwLeftTouch = LwTouchHoldStatus(target, area, true)   ; LIVINGWORLD PATCH: touch consent
     elseIf (!abIsLeft && _lwRightHeld == target && _lwRightSince == now)
         _lwRightArea = area
         _lwPRGrabMs = (Utility.GetCurrentRealTime() - now) * 1000.0
+        _lwRightTouch = LwTouchHoldStatus(target, area, true)
     endIf
 EndEvent
 
@@ -510,7 +516,7 @@ function LivingWorldEndHold(Actor target, bool abIsLeft, float now)
             seconds = 0.0
         endIf
         if (seconds >= LivingWorldMinGrabSeconds)
-            LivingWorldRecordGrab(target, _lwLeftNode, _lwLeftArea, "L", seconds)
+            LivingWorldRecordGrab(target, _lwLeftNode, _lwLeftArea, "L", seconds, _lwLeftTouch)
         else
             _lwPLShort += 1
         endIf
@@ -522,7 +528,7 @@ function LivingWorldEndHold(Actor target, bool abIsLeft, float now)
             seconds = 0.0
         endIf
         if (seconds >= LivingWorldMinGrabSeconds)
-            LivingWorldRecordGrab(target, _lwRightNode, _lwRightArea, "R", seconds)
+            LivingWorldRecordGrab(target, _lwRightNode, _lwRightArea, "R", seconds, _lwRightTouch)
         else
             _lwPRShort += 1
         endIf
@@ -555,17 +561,19 @@ function LivingWorldConsumed(Actor consumer, Form item, string via)
     LivingWorldQueue(rec)
 endFunction
 
-function LivingWorldRecordGrab(Actor target, string node, string area, string hand, float seconds)
+function LivingWorldRecordGrab(Actor target, string node, string area, string hand, float seconds, string touch = "")
     if (_lwScAny && LwSceneWithPlayer(target))
         return   ; part of an intimate scene, not a grab
     endIf
     string rec = LivingWorldHeader("grab") + "|actor=" + LivingWorldActorField(PlayerRef) + "|target=" + LivingWorldActorField(target) + "|node=" + node + "|area=" + area + "|hand=" + hand + "|dur=" + seconds + "|trank=" + target.GetRelationshipRank(PlayerRef)
+    rec += LwTouchRecordFields(touch) ; LIVINGWORLD PATCH: touch consent (consent=hug / consent=breach|allowed=...)
     _lwSawGuard = None
     _lwSawGuardMeters = 1000.0
     rec += LivingWorldWitnesses(PlayerRef, target)
     LivingWorldQueue(rec)
     bool reacted = (hand == "L" && _lwLeftReacted) || (hand == "R" && _lwRightReacted)
-    if (!reacted)
+    bool agreed = touch != "" && StringUtil.Find(touch, "breach") != 0   ; LIVINGWORLD PATCH: touch consent
+    if (!reacted && !agreed)
         LivingWorldMaybeReact(target, area, seconds, false, _lwSawGuard)
     endIf
     ; let a running conversation react straight away, as Mantella's own events do.
@@ -579,7 +587,11 @@ function LivingWorldRecordGrab(Actor target, string node, string area, string ha
     if (target != _lwLastSaidTarget || now - _lwLastSaidAt >= LivingWorldGrabLineCooldown)
         _lwLastSaidTarget = target
         _lwLastSaidAt = now
-        ListenerScript.AddIngameEventToConversation(PlayerRef.GetDisplayName() + " grabbed " + LivingWorldFog.RealName(target) + " by the " + part + " for " + (seconds as int) + " seconds.")
+        if (touch != "") ; LIVINGWORLD PATCH: touch consent, said as what it was
+            ListenerScript.AddIngameEventToConversation(LwTouchLine(target, touch, part, seconds))
+        else
+            ListenerScript.AddIngameEventToConversation(PlayerRef.GetDisplayName() + " grabbed " + LivingWorldFog.RealName(target) + " by the " + part + " for " + (seconds as int) + " seconds.")
+        endIf
     endIf
 endFunction
 
@@ -599,6 +611,9 @@ function LivingWorldMaybeReact(Actor target, string area, float seconds, bool st
     endIf
     if (_lwScAny && LwSceneWithPlayer(target))
         return   ; the player's partner in an intimate scene does not pull away from it
+    endIf
+    if (LwTouchKind(target, area) != "")
+        return   ; LIVINGWORLD PATCH: touch consent, they agreed to this
     endIf
     bool sensitive = LivingWorldSensitiveArea(area)
     bool isLong = seconds >= LivingWorldReactHoldSeconds
@@ -1828,6 +1843,7 @@ function LivingWorldRegisterAttireAndDrink()
     _lwTickDue = 0.0
     _lwRegularDueAt = Utility.GetCurrentRealTime() + LivingWorldHygienePollSeconds
     LwBodyReset() ; LIVINGWORLD PATCH: body language (BL1)
+    LwTouchReset() ; LIVINGWORLD PATCH: touch consent (never carried across a load)
     LwGestureReset() ; LIVINGWORLD PATCH: gestures (BL2)
     LwScheduleNext(Utility.GetCurrentRealTime())
 endFunction
@@ -1962,6 +1978,9 @@ Event OnUpdate()
         endIf
         if (LivingWorldHygieneOn)
             LwHygieneTick()
+        endIf
+        if (_lwtAny)
+            LwTouchSweep(now)   ; LIVINGWORLD PATCH: touch consent, agreements that ran out
         endIf
         _lwRegularDueAt = now + LivingWorldHygienePollSeconds
     endIf
@@ -4098,6 +4117,9 @@ endFunction
 function LwBodyStep(int i, Actor a, float now, bool weaponDrawnNow, bool inTalk)
     float d = a.GetDistance(PlayerRef) / 71.0210
     float comfort = _lwbComfort[i]
+    if (_lwtAny && LwTouchFind(a) >= 0)
+        comfort = 0.0   ; LIVINGWORLD PATCH: touch consent, someone who agreed to be held does not step back
+    endIf
     bool busy = LwBodyBusy(a)
     ; timers running out
     if (_lwbOffsetUntil[i] > 0.0 && now >= _lwbOffsetUntil[i])
@@ -5611,6 +5633,8 @@ float _lwgLastPoint = -100.0
 float _lwgLastBeckon = -100.0
 float _lwgLastUp = -100.0
 float _lwgLastThumb = -100.0
+int _lwgOpenTicks = 0           ; LIVINGWORLD PATCH: touch consent, open arms
+float _lwgLastOpen = -100.0
 float _lwgCostSum = 0.0
 int _lwgCostN = 0
 bool _lwgSlowed = false
@@ -5880,6 +5904,26 @@ function LwGestureTick(float now)
         _lwgLastUp = now
         _lwgUpTicks = 0
         LwGesture("hands_up", None)
+        LwGestureCost(t0)
+        return
+    endIf
+
+    ; open arms (touch consent): both hands out wide, about chest to shoulder height, held for about a second
+    if (LivingWorldTouchOn && free && hz > -45.0 && hz < 5.0 && lz > -45.0 && lz < 5.0 && !HiggsVR.GetGrabbedObject(true))
+        float ox = VRIK.VrikGetHandX(true) - ex - hx
+        float oy = VRIK.VrikGetHandY(true) - ey - hy
+        if (ox * ox + oy * oy > LwTouchOpenArmsSpread * LwTouchOpenArmsSpread)
+            _lwgOpenTicks += 1
+        else
+            _lwgOpenTicks = 0
+        endIf
+    else
+        _lwgOpenTicks = 0
+    endIf
+    if (_lwgOpenTicks >= 6 && now - _lwgLastOpen >= 20.0)
+        _lwgLastOpen = now
+        _lwgOpenTicks = 0
+        LwGestureOpenArms()
         LwGestureCost(t0)
         return
     endIf
@@ -6436,4 +6480,369 @@ int function LwHex(string s)
         i += 1
     endWhile
     return value
+endFunction
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; LIVINGWORLD PATCH: touch consent                                                                   ;
+; An NPC who agrees in the conversation to a hug, holding hands or another touch (the server's       ;
+; mantella_lw_touch_allow: "Name|hug,hands|minutes", MantellaExtension livingworld/touch) gets it     ;
+; without fuss, for the conversation and LwTouchGraceSeconds after (or the minutes they named):       ;
+; - PLANCK leaves them alone (PLANCK.AddAggressionIgnoredActor: no "stop that", no shove, no anger);  ;
+; - no pull-away reaction, no guard stepping in, no body-language step back or folded arms;           ;
+; - the grab record carries consent=<kind> and the conversation hears "Zach hugged Gerdur, as she had ;
+;   agreed"; a hug opens their arms, and so does the player opening theirs (gesture open_arms).       ;
+; A hand on a sensitive place outside the agreement ends it at once (consent=breach) and counts as an ;
+; ordinary unwelcome grab from then on. Nothing here is kept across a load: every load starts afresh. ;
+; Kinds and the areas they cover are the same table as the server's (livingworld/touch/__init__.py).  ;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+bool property LivingWorldTouchOn = true auto hidden           ; the server's start reply switches it (MANTELLA_LW_TOUCH_CONSENT)
+float property LwTouchGraceSeconds = 180.0 auto hidden        ; an agreement lasts this long after the conversation ends
+int property LwTouchOpenArmsIdleId = 0x000F4331 auto hidden   ; IdleCO2Ceremony1Welcome (Skyrim.esm): arms open in welcome
+float property LwTouchOpenArmsSpread = 80.0 auto hidden       ; game units between the hands for "open arms" (about 1.1 m)
+bool property LwTouchNotices = true auto hidden               ; a notification when someone agrees or takes it back
+
+Actor[] _lwtActors          ; 8 slots
+string[] _lwtKinds          ; "hug,hands"
+float[] _lwtUntil           ; real time it runs out; 0 while the conversation it was agreed in runs
+bool _lwtAny = false
+bool _lwtPlanck = false
+Idle _lwtOpenArms
+
+; Every load: nothing agreed survives it. PLANCK's ignore list lives in memory only, so take back what this
+; save's agreements may have put on it in an earlier load of the same session.
+function LwTouchReset()
+    if (_lwtActors && _lwtActors.Length == 8)
+        int i = 0
+        while (i < 8)
+            if (_lwtActors[i])
+                LwTouchClear(i)
+            endIf
+            i += 1
+        endWhile
+    endIf
+    _lwtActors = new Actor[8]
+    _lwtKinds = new string[8]
+    _lwtUntil = new float[8]
+    _lwtAny = false
+    _lwtPlanck = SKSE.GetPluginVersion("PLANCK") > 0
+    _lwtOpenArms = Game.GetFormFromFile(LwTouchOpenArmsIdleId, "Skyrim.esm") as Idle
+    _lwLeftTouch = ""
+    _lwRightTouch = ""
+endFunction
+
+function LivingWorldTouchSet(bool on)
+    if (!on && LivingWorldTouchOn)
+        LwTouchReset()
+    endIf
+    LivingWorldTouchOn = on
+endFunction
+
+function LwTouchPlanck(Actor a, bool ignore)
+    if (!_lwtPlanck || !a)
+        return
+    endIf
+    if (ignore)
+        LivingWorldPlanck.Ignore(a)
+    else
+        LivingWorldPlanck.Unignore(a)
+    endIf
+endFunction
+
+; The slot of someone's agreement, or -1. An agreement that ran out is ended here.
+int function LwTouchFind(Actor a)
+    if (!_lwtAny || !a || !_lwtActors)
+        return -1
+    endIf
+    int i = _lwtActors.Find(a)
+    if (i >= 0 && _lwtUntil[i] > 0.0 && Utility.GetCurrentRealTime() >= _lwtUntil[i])
+        LwTouchEnded(i, false)
+        return -1
+    endIf
+    return i
+endFunction
+
+function LwTouchClear(int i)
+    LwTouchPlanck(_lwtActors[i], false)
+    _lwtActors[i] = None
+    _lwtKinds[i] = ""
+    _lwtUntil[i] = 0.0
+endFunction
+
+; An agreement is over (ran out, taken back, or the hands went further). Shown only when it was taken back.
+function LwTouchEnded(int i, bool withdrawn)
+    Actor a = _lwtActors[i]
+    LwTouchClear(i)
+    if (withdrawn && a && LwTouchNotices)
+        Debug.Notification(a.GetDisplayName() + " no longer wants to be touched.")
+    endIf
+    _lwtAny = LwTouchCount() > 0
+endFunction
+
+int function LwTouchCount()
+    int n = 0
+    int i = 0
+    while (i < 8)
+        if (_lwtActors[i])
+            n += 1
+        endIf
+        i += 1
+    endWhile
+    return n
+endFunction
+
+; mantella_lw_touch_allow on an NPC line: ["Name|hug,hands|minutes"]
+function LivingWorldTouchAllow(string[] grants, MantellaConversation conv)
+    if (!LivingWorldTouchOn || !grants || !_lwtActors)
+        return
+    endIf
+    float now = Utility.GetCurrentRealTime()
+    int g = 0
+    while (g < grants.Length)
+        string[] parts = StringUtil.Split(grants[g], "|")
+        Actor a = None
+        if (parts.Length >= 2)
+            a = conv.GetActorByName(parts[0])
+        endIf
+        if (a && a != PlayerRef && !a.IsChild() && !a.IsDead())
+            int i = _lwtActors.Find(a)
+            if (i < 0)
+                i = _lwtActors.Find(None)
+            endIf
+            if (i < 0)   ; all eight in use: the one running out soonest makes room
+                i = 0
+                int k = 1
+                while (k < 8)
+                    if (_lwtUntil[k] > 0.0 && (_lwtUntil[i] == 0.0 || _lwtUntil[k] < _lwtUntil[i]))
+                        i = k
+                    endIf
+                    k += 1
+                endWhile
+                LwTouchClear(i)
+            endIf
+            _lwtActors[i] = a
+            _lwtKinds[i] = parts[1]
+            float minutes = 0.0
+            if (parts.Length >= 3)
+                minutes = parts[2] as float
+            endIf
+            if (minutes > 0.0)
+                _lwtUntil[i] = now + minutes * 60.0
+            else
+                _lwtUntil[i] = 0.0
+            endIf
+            _lwtAny = true
+            LwTouchPlanck(a, true)
+            LwTouchRelaxBody(a)
+            if (LwTouchNotices)
+                Debug.Notification(a.GetDisplayName() + " agreed: " + parts[1])
+            endIf
+            if (LwTouchHasKind(i, "hug") || LwTouchHasKind(i, "anywhere"))
+                LwTouchOpenArms(a)
+            endIf
+            Debug.Trace("Mantella Living World touch: " + a.GetDisplayName() + " agreed to " + parts[1] + " (" + minutes + " min)")
+        endIf
+        g += 1
+    endWhile
+endFunction
+
+; mantella_lw_touch_withdraw on an NPC line: ["Name"]
+function LivingWorldTouchWithdraw(string[] names, MantellaConversation conv)
+    if (!names || !_lwtActors)
+        return
+    endIf
+    int n = 0
+    while (n < names.Length)
+        Actor a = conv.GetActorByName(names[n])
+        int i = -1
+        if (a)
+            i = _lwtActors.Find(a)
+        endIf
+        if (i >= 0)
+            LwTouchEnded(i, true)
+            Debug.Trace("Mantella Living World touch: " + a.GetDisplayName() + " took it back")
+        endIf
+        n += 1
+    endWhile
+endFunction
+
+; The conversation ended: agreements made "for now" run out a few minutes from now.
+function LwTouchConversationEnded()
+    if (!_lwtAny || !_lwtActors)
+        return
+    endIf
+    float until = Utility.GetCurrentRealTime() + LwTouchGraceSeconds
+    int i = 0
+    while (i < 8)
+        if (_lwtActors[i] && _lwtUntil[i] == 0.0)
+            _lwtUntil[i] = until
+        endIf
+        i += 1
+    endWhile
+endFunction
+
+function LwTouchSweep(float now)
+    int i = 0
+    while (i < 8)
+        if (_lwtActors[i] && _lwtUntil[i] > 0.0 && now >= _lwtUntil[i])
+            LwTouchEnded(i, false)
+        endIf
+        i += 1
+    endWhile
+endFunction
+
+bool function LwTouchHasKind(int i, string kind)
+    return StringUtil.Find("," + _lwtKinds[i] + ",", "," + kind + ",") >= 0
+endFunction
+
+; The kind of touch someone agreed to that covers a hand on `area`, or "". An area the game could not
+; tell ("") counts as a hug (or anywhere), the commonest reason to be that close.
+string function LwTouchKind(Actor a, string area)
+    int i = LwTouchFind(a)
+    if (i < 0)
+        return ""
+    endIf
+    string base = area
+    if (StringUtil.Find(base, "left ") == 0)
+        base = StringUtil.Substring(base, 5)
+    elseIf (StringUtil.Find(base, "right ") == 0)
+        base = StringUtil.Substring(base, 6)
+    endIf
+    string[] kinds = StringUtil.Split(_lwtKinds[i], ",")
+    int k = 0
+    while (k < kinds.Length)
+        if (LwTouchCovers(kinds[k], base))
+            return kinds[k]
+        endIf
+        k += 1
+    endWhile
+    return ""
+endFunction
+
+bool function LwTouchCovers(string kind, string base)
+    if (kind == "anywhere")
+        return true
+    elseIf (base == "")
+        return kind == "hug"
+    elseIf (kind == "hug")
+        return base == "upper back" || base == "lower back" || base == "side" || base == "shoulder" || base == "upper arm" || base == "stomach" || base == "head"
+    elseIf (kind == "hands")
+        return base == "hand" || base == "forearm"
+    elseIf (kind == "back")
+        return base == "upper back" || base == "lower back" || base == "shoulder"
+    elseIf (kind == "neck")
+        return base == "neck" || base == "head"
+    elseIf (kind == "face")
+        return base == "face" || base == "head"
+    elseIf (kind == "butt")
+        return base == "backside" || base == "hip"
+    elseIf (kind == "chest")
+        return base == "chest"
+    endIf
+    return false
+endFunction
+
+; What this hold is: the kind agreed to, "breach:<kinds>" (a sensitive place outside the agreement, which
+; ends it; only once the area is known, `final`), or "" (nothing agreed).
+string function LwTouchHoldStatus(Actor target, string area, bool final)
+    if (!LivingWorldTouchOn || !_lwtAny)
+        return ""
+    endIf
+    int i = LwTouchFind(target)
+    if (i < 0)
+        return ""
+    endIf
+    string kind = LwTouchKind(target, area)
+    if (kind != "")
+        return kind
+    endIf
+    if (final && LivingWorldSensitiveArea(area))
+        string had = _lwtKinds[i]
+        LwTouchEnded(i, false)
+        Debug.Trace("Mantella Living World touch: hands on " + target.GetDisplayName() + "'s " + area + ", past what they agreed (" + had + "); agreement over")
+        return "breach:" + had
+    endIf
+    return ""
+endFunction
+
+string function LwTouchRecordFields(string touch)
+    if (touch == "")
+        return ""
+    elseIf (StringUtil.Find(touch, "breach:") == 0)
+        return "|consent=breach|allowed=" + StringUtil.Substring(touch, 7)
+    endIf
+    return "|consent=" + touch
+endFunction
+
+; The conversation's line for a touch someone agreed to, or one that went further than they agreed.
+string function LwTouchLine(Actor target, string touch, string part, float seconds)
+    string p = PlayerRef.GetDisplayName()
+    string who = LivingWorldFog.RealName(target)
+    string secs = " for " + (seconds as int) + " seconds"
+    if (StringUtil.Find(touch, "breach:") == 0)
+        return p + " grabbed " + who + " by the " + part + secs + ", though " + who + " had only agreed to " + StringUtil.Substring(touch, 7) + ". " + who + " never agreed to that."
+    endIf
+    string did = p + " touched " + who + "'s " + part
+    if (touch == "hug")
+        did = p + " hugged " + who
+    elseIf (touch == "hands")
+        did = p + " held " + who + "'s hand"
+    elseIf (touch == "back")
+        did = p + " rubbed " + who + "'s back"
+    elseIf (touch == "butt")
+        did = p + " put a hand on " + who + "'s backside"
+    endIf
+    return did + secs + ", as " + who + " had agreed."
+endFunction
+
+; Arms open in welcome, facing the player. Not while sitting, in a scene or fighting.
+function LwTouchOpenArms(Actor a)
+    if (!a || !_lwtOpenArms || a.IsInCombat() || a.GetSitState() != 0 || a.IsOnMount() || (_lwScAny && LwSceneWithPlayer(a)))
+        return
+    endIf
+    a.PlayIdle(_lwtOpenArms)
+endFunction
+
+; Undo a step back or folded arms body language started on them before they agreed.
+function LwTouchRelaxBody(Actor a)
+    if (!_lwbActors || _lwbActors.Length != 4)
+        return
+    endIf
+    int i = _lwbActors.Find(a)
+    if (i < 0)
+        return
+    endIf
+    if (_lwbOffsetUntil[i] > 0.0)
+        a.ClearKeepOffsetFromActor()
+        _lwbOffsetUntil[i] = 0.0
+    endIf
+    if (_lwbArmsUntil[i] > 0.0)
+        Debug.SendAnimationEvent(a, "OffsetStop")
+        _lwbArmsUntil[i] = 0.0
+    endIf
+    _lwbInside[i] = false
+endFunction
+
+; The player opens their arms to whoever they face: someone who agreed to a hug opens theirs back;
+; anyone else sees a hug offered (a presence record their next line may answer).
+function LwGestureOpenArms()
+    _lwgN = 0
+    Actor to = LwgAddressee()
+    if (!to)
+        if (LivingWorldGestureNotices)
+            Debug.Notification("Gesture: open arms (nobody facing you)")
+        endIf
+        return
+    endIf
+    int i = LwTouchFind(to)
+    bool agreed = i >= 0 && (LwTouchHasKind(i, "hug") || LwTouchHasKind(i, "anywhere"))
+    string extra = "|dist=" + (to.GetDistance(PlayerRef) / 71.0210)
+    if (agreed)
+        extra += "|agreed=1"
+        LwTouchOpenArms(to)
+    endIf
+    LwBodyRecord(to, "open_arms", extra)
+    if (LivingWorldGestureNotices)
+        Debug.Notification("Gesture: open arms to " + to.GetDisplayName())
+    endIf
 endFunction
