@@ -1,4 +1,5 @@
-"""Builds LWNorthwatchPrisoners.esp: the three Northwatch Keep prisoners stop respawning.
+"""Builds LWNorthwatchPrisoners.esp: the three Northwatch Keep prisoners stop respawning, and the Breton woman
+is named Elyse Marrow.
 
 Usage:  python -I make_esp.py "<Data folder>" "<output .esp>"
 
@@ -17,6 +18,8 @@ from pathlib import Path
 
 BASES = (0x000C1A9E, 0x000C1A9F, 0x000C1AA3)
 RESPAWN = 0x08
+# The Breton woman gets a name of her own (the user let us pick, 2026-11-12); the two men stay 'Northwatch Prisoner'.
+NAMES = {0x000C1AA3: b'Elyse Marrow'}
 LSTRINGS = {b'FULL', b'SHRT'}
 
 
@@ -71,7 +74,7 @@ def pack_sub(t, v):
     return t + struct.pack('<H', len(v)) + v
 
 
-def patch(rec, strings, localized):
+def patch(fid, rec, strings, localized):
     hdr = bytearray(rec[:24])
     flags = struct.unpack_from('<I', hdr, 8)[0]
     body = rec[24:]
@@ -85,6 +88,9 @@ def patch(rec, strings, localized):
             v = struct.pack('<I', f & ~RESPAWN) + v[4:]
             print(f'  ACBS flags 0x{f:08X} -> 0x{f & ~RESPAWN:08X}')
             seen_acbs = True
+        elif t == b'FULL' and fid in NAMES:
+            v = NAMES[fid] + b'\0'
+            print(f'  FULL = {NAMES[fid].decode()!r} (renamed)')
         elif localized and t in LSTRINGS and len(v) == 4:
             sid = struct.unpack('<I', v)[0]
             v = strings.get(sid, b'') + b'\0'
@@ -109,7 +115,7 @@ def main(data_dir, out_path):
     body = b''
     for fid in BASES:
         print(f'NPC_ 0x{fid:08X}')
-        body += patch(recs[fid], strings, localized)
+        body += patch(fid, recs[fid], strings, localized)
     grup = b'GRUP' + struct.pack('<I', 24 + len(body)) + b'NPC_' + struct.pack('<iHHHH', 0, 0, 0, 0, 0) + body
     hedr = struct.pack('<fII', 1.7, len(BASES), 0x800)
     head = (pack_sub(b'HEDR', hedr)

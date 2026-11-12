@@ -4,7 +4,7 @@ $ErrorActionPreference = 'Stop'
 $here     = $PSScriptRoot
 $gameData = 'D:\SteamLibrary\steamapps\common\SkyrimVR\Data'
 $python   = 'D:\ModdingTools\MantellaForks\venv\Scripts\python.exe'
-$version  = '0.1.0'
+$version  = '0.2.0'
 if (!(Test-Path $python)) { $python = 'python' }
 
 $stage = Join-Path $here "Dist\stage-$version"
