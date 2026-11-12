@@ -47,7 +47,32 @@ string function RealName(Actor a) global
     if (label != "" && shown == label)
         return a.GetActorBase().GetName()
     endIf
+    if (label == "") ; LIVINGWORLD PATCH: guard names, a generic guard shown by their own name is still "Whiterun Guard"
+        string shared = GuardSharedName(a)
+        if (shared != "")
+            return shared
+        endIf
+    endIf
     return shown
+endFunction
+
+; The name a generic guard shares with the rest ("Whiterun Guard"), or "" for anyone else
+string function GuardSharedName(Actor a) global
+    if (!a || a == Game.GetPlayer() || !a.IsGuard())
+        return ""
+    endIf
+    ActorBase base = a.GetActorBase()
+    if (!base || base.IsUnique())
+        return ""
+    endIf
+    string shared = base.GetName()
+    if (shared == "")
+        ActorBase leveled = a.GetLeveledActorBase()
+        if (leveled)
+            shared = leveled.GetName()
+        endIf
+    endIf
+    return shared
 endFunction
 
 ; Show this person by name or as a stranger. known: the real names the player knows; fogOn false shows everyone.
