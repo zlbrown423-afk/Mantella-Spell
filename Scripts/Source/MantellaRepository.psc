@@ -3801,7 +3801,7 @@ function LwBodyReset()
         _lwbProfNext = 0
     endIf
     _lwbArmsIdle = Game.GetFormFromFile(0x000FF7F4, "Skyrim.esm") as Idle   ; IdleOffsetArmsCrossedStart
-    _lwbWeaponWas = PlayerRef.IsWeaponDrawn()
+    _lwbWeaponWas = LwPlayerArmed()
     _lwbDueAt = 0.0
     _lwbScanDueAt = 0.0
 endFunction
@@ -4006,6 +4006,21 @@ function LwBodyAdd(Actor a, float now)
     _lwbStareSince[i] = 0.0
 endFunction
 
+; Weapon drawn with something to fear in hand. Skyrim counts raised fists as "weapon drawn" too, and in
+; VR (VRIK hand poses, holding the hands out) that happens without the player meaning it, so empty
+; hands, a torch or a shield alone do not count. A sword, axe, bow, staff or a readied spell does.
+bool function LwPlayerArmed()
+    if (!PlayerRef.IsWeaponDrawn())
+        return false
+    endIf
+    return LwHandArmed(PlayerRef.GetEquippedItemType(0)) || LwHandArmed(PlayerRef.GetEquippedItemType(1))
+endFunction
+
+; GetEquippedItemType: 0 fists, 1-8 weapons (8 staff), 9 spell, 10 shield, 11 torch, 12 crossbow.
+bool function LwHandArmed(int t)
+    return (t >= 1 && t <= 9) || t == 12
+endFunction
+
 ; One body language step. Returns true while anyone is watched (the next step comes sooner).
 bool function LwBodyTick(float now)
     if (!LivingWorldBodyLanguageOn || !_lwbActors || Utility.IsInMenuMode())
@@ -4015,7 +4030,7 @@ bool function LwBodyTick(float now)
         LwBodyScan()
         _lwbScanDueAt = now + LwBodyScanSeconds
     endIf
-    bool weaponOut = PlayerRef.IsWeaponDrawn()
+    bool weaponOut = LwPlayerArmed()
     bool weaponDrawnNow = weaponOut && !_lwbWeaponWas
     if (weaponDrawnNow && Utility.GetCurrentRealTime() - _lwErectEventAt < 3.0)
         weaponDrawnNow = false   ; the arousal animation, not a weapon (see LwSetErect)
