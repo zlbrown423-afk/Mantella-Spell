@@ -2623,6 +2623,7 @@ endFunction
 Event OnCrosshairRefChange(ObjectReference ref)
     if (ref as Actor) ; LIVINGWORLD PATCH: fog, the name over the crosshair is right before it shows
         LivingWorldFog.Apply(ref as Actor, LivingWorldFogKnown, LivingWorldFogActive())
+        LivingWorldGuardNameApply(ref as Actor) ; LIVINGWORLD PATCH: guard names
     endIf
     LwNotePointed(ref)
 EndEvent
@@ -4022,6 +4023,7 @@ function LwBodyScan()
     Actor closest = Game.FindClosestActorFromRef(PlayerRef, LwBodyWatchMeters * 71.0210)
     if (closest) ; LIVINGWORLD PATCH: fog, someone who walks up and greets the player
         LivingWorldFog.Apply(closest, LivingWorldFogKnown, LivingWorldFogActive())
+        LivingWorldGuardNameApply(closest) ; LIVINGWORLD PATCH: guard names
     endIf
     LwBodyAdd(closest, now)
 endFunction
@@ -5041,6 +5043,96 @@ function LivingWorldFogSweep(MantellaConversation conv)
         endIf
         n += 1
     endWhile
+endFunction
+
+; ---- LIVINGWORLD PATCH: guard names (livingworld/guard/names.py on the server) ----
+; Generic guards ("Whiterun Guard") shown by the personal name the server gave them, once the player has
+; learned it. Keyed by the guard's reference form ID. Kept in the save, like the names SetDisplayName gave,
+; so an older save brings back what the player knew then. The real name (LivingWorldFog.RealName) still goes
+; to the server, so who the guard is does not change. A name of "" puts the shared name back.
+bool LivingWorldGuardNamesOff = false
+int[] LivingWorldGuardNameIds
+string[] LivingWorldGuardNameNames
+
+; The start reply: names on, or off (MANTELLA_LW_GUARD_NAMES=0: every renamed guard gets the shared name back)
+function LivingWorldGuardNamesOn(bool namesOn, MantellaConversation conv)
+    if (namesOn)
+        LivingWorldGuardNamesOff = false
+        return
+    endIf
+    if (LivingWorldGuardNamesOff)
+        return
+    endIf
+    LivingWorldGuardNamesOff = true
+    int i = 0
+    while (LivingWorldGuardNameIds && i < LivingWorldGuardNameIds.Length)
+        LivingWorldGuardNameNames[i] = ""
+        i += 1
+    endWhile
+    LivingWorldGuardNamesSweep(conv)
+endFunction
+
+; Guards to show by name from now on
+function LivingWorldGuardNamesAdd(int[] ids, string[] names, MantellaConversation conv)
+    if (!ids || !names || ids.Length == 0)
+        return
+    endIf
+    if (!LivingWorldGuardNameIds)
+        LivingWorldGuardNameIds = Utility.CreateIntArray(0)
+        LivingWorldGuardNameNames = Utility.CreateStringArray(0)
+    endIf
+    int i = 0
+    while (i < ids.Length && i < names.Length)
+        int at = LivingWorldGuardNameIds.Find(ids[i])
+        if (at < 0)
+            at = LivingWorldGuardNameIds.Length
+            LivingWorldGuardNameIds = Utility.ResizeIntArray(LivingWorldGuardNameIds, at + 1)
+            LivingWorldGuardNameNames = Utility.ResizeStringArray(LivingWorldGuardNameNames, at + 1)
+            LivingWorldGuardNameIds[at] = ids[i]
+        endIf
+        LivingWorldGuardNameNames[at] = names[i]
+        i += 1
+    endWhile
+    LivingWorldGuardNamesSweep(conv)
+endFunction
+
+function LivingWorldGuardNamesSweep(MantellaConversation conv)
+    if (!conv || !LivingWorldGuardNameIds)
+        return
+    endIf
+    FormList participants = conv.Participants
+    int p = 0
+    while (p < participants.GetSize())
+        LivingWorldGuardNameApply(participants.GetAt(p) as Actor)
+        p += 1
+    endWhile
+    Actor[] nearby = conv.GetCachedNearbyActors()
+    int n = 0
+    while (nearby && n < nearby.Length)
+        LivingWorldGuardNameApply(nearby[n])
+        n += 1
+    endWhile
+endFunction
+
+; Show this guard by their own name (or put the shared name back)
+function LivingWorldGuardNameApply(Actor a)
+    if (!a || !LivingWorldGuardNameIds || LivingWorldGuardNameIds.Length == 0)
+        return
+    endIf
+    int at = LivingWorldGuardNameIds.Find(a.GetFormID())
+    if (at < 0)
+        return
+    endIf
+    string name = LivingWorldGuardNameNames[at]
+    string shown = a.GetDisplayName()
+    if (name == "" || LivingWorldGuardNamesOff)
+        string shared = LivingWorldFog.GuardSharedName(a)
+        if (shared != "" && shown != shared)
+            a.SetDisplayName(shared)
+        endIf
+    elseIf (shown != name)
+        a.SetDisplayName(name)
+    endIf
 endFunction
 
 ; An NPC line: places the NPC told the player about get their map marker (not marked as visited)

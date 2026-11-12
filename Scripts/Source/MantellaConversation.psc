@@ -220,6 +220,12 @@ function ContinueConversation(string nextAction, int handle)
         if(SKSE_HTTP.hasKey(handle, "mantella_lw_fog_on")) ; LIVINGWORLD PATCH: fog, the people the player knows by name
             repository.LivingWorldFogSet(SKSE_HTTP.getBool(handle, "mantella_lw_fog_on", false), SKSE_HTTP.getStringArray(handle, "mantella_lw_fog_known"), self)
         endif
+        if(SKSE_HTTP.hasKey(handle, "mantella_lw_guard_names_on")) ; LIVINGWORLD PATCH: guard names, generic guards shown by their own name
+            repository.LivingWorldGuardNamesOn(SKSE_HTTP.getBool(handle, "mantella_lw_guard_names_on", true), self)
+        endif
+        if(SKSE_HTTP.hasKey(handle, "mantella_lw_guard_name_ids")) ; LIVINGWORLD PATCH: guard names
+            repository.LivingWorldGuardNamesAdd(SKSE_HTTP.getIntArray(handle, "mantella_lw_guard_name_ids"), SKSE_HTTP.getStringArray(handle, "mantella_lw_guard_names"), self)
+        endif
         LivingWorldDiaryKeepers(handle) ; LIVINGWORLD PATCH: participants who keep a diary (LWDiary.esp)
         repository.LivingWorldWatchWalkAway() ; LIVINGWORLD PATCH: walking away ends the conversation
         ;Debug.Notification("Conversation started.")
@@ -384,6 +390,9 @@ function ProcessNpcSpeak(int handle)
     endif
     if(SKSE_HTTP.hasKey(handle, "mantella_lw_fog_reveal")) ; LIVINGWORLD PATCH: fog, names the player just learned
         repository.LivingWorldFogReveal(SKSE_HTTP.getStringArray(handle, "mantella_lw_fog_reveal"), self)
+    endif
+    if(SKSE_HTTP.hasKey(handle, "mantella_lw_guard_name_ids")) ; LIVINGWORLD PATCH: guard names, guards whose name the player just learned
+        repository.LivingWorldGuardNamesAdd(SKSE_HTTP.getIntArray(handle, "mantella_lw_guard_name_ids"), SKSE_HTTP.getStringArray(handle, "mantella_lw_guard_names"), self)
     endif
     if(SKSE_HTTP.hasKey(handle, "mantella_lw_fog_marker_ids")) ; LIVINGWORLD PATCH: fog, places the NPC just told the player about
         repository.LivingWorldFogMarkers(SKSE_HTTP.getIntArray(handle, "mantella_lw_fog_marker_ids"), SKSE_HTTP.getStringArray(handle, "mantella_lw_fog_marker_plugins"), SKSE_HTTP.getStringArray(handle, "mantella_lw_fog_marker_names"))
