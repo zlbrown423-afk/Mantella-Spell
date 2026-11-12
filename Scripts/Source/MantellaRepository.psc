@@ -1345,8 +1345,8 @@ string property LivingWorldBedPlugin = "" auto hidden
 int property LivingWorldBedOwn = -1 auto hidden   ; pending: 1 = give, 0 = take back, -1 = nothing pending
 
 ;; LIVINGWORLD PATCH: guard careers, a footlocker by the bunk. The server names a container base that never
-;; respawns; the first time the player stands by their own bunk (within about 2.5 m) one is placed at their
-;; feet and made theirs. It is a placed, persistent reference, so it and what is put in it stay in the save.
+;; respawns; the first time the player stands by their own bunk (within about 2.5 m) one is placed against
+;; the bunk, square with it, on the side the player stands, and made theirs. It is a placed, persistent reference, so it and what is put in it stay in the save.
 int property LivingWorldChestBase = 0 auto hidden
 string property LivingWorldChestPlugin = "" auto hidden
 ObjectReference property LivingWorldChestRef auto hidden
@@ -1376,13 +1376,55 @@ function LivingWorldGuardChestRetry()
         LivingWorldChestBase = 0
         return
     endIf
-    ObjectReference chest = PlayerRef.PlaceAtMe(base, 1, true, false)
+    ObjectReference chest = bed.PlaceAtMe(base, 1, true, true)   ; placed disabled, moved into place, then shown
     if (chest)
+        LwPlaceBesideBed(chest, bed)
+        chest.Enable()
         chest.SetActorOwner(PlayerRef.GetActorBase())
         LivingWorldChestRef = chest
         LivingWorldChestBase = 0
         Debug.Notification("A footlocker by your bunk is yours to use.")
     endIf
+endFunction
+
+;; Square with the bunk and right against it, on the side the player is standing (open floor, not the wall):
+;; along the bed's short or long side, whichever the player is nearer to, with the bed's own facing and level.
+function LwPlaceBesideBed(ObjectReference chest, ObjectReference bed)
+    float a = bed.GetAngleZ()
+    float c = Math.Cos(a)
+    float sn = Math.Sin(a)
+    float dx = PlayerRef.GetPositionX() - bed.GetPositionX()
+    float dy = PlayerRef.GetPositionY() - bed.GetPositionY()
+    float lx = dx * c - dy * sn          ; the player's offset in the bed's own axes
+    float ly = dx * sn + dy * c
+    float halfW = bed.GetWidth() / 2.0
+    float halfL = bed.GetLength() / 2.0
+    if (halfW < 30.0)
+        halfW = 50.0
+    endIf
+    if (halfL < 30.0)
+        halfL = 100.0
+    endIf
+    float gap = 32.0                     ; about half a footlocker's depth
+    float tx = 0.0
+    float ty = 0.0
+    float turn = 0.0
+    if (Math.Abs(lx) / halfW > Math.Abs(ly) / halfL)
+        tx = halfW + gap
+        if (lx < 0.0)
+            tx = -tx
+        endIf
+        turn = 90.0
+    else
+        ty = halfL + gap
+        if (ly < 0.0)
+            ty = -ty
+        endIf
+    endIf
+    float wx = tx * c + ty * sn
+    float wy = ty * c - tx * sn
+    chest.SetAngle(0.0, 0.0, a + turn)
+    chest.SetPosition(bed.GetPositionX() + wx, bed.GetPositionY() + wy, bed.GetPositionZ())
 endFunction
 
 ;; LIVINGWORLD PATCH: guard careers G2f, arrests. The server's rules decide what someone the player arrests does:
