@@ -16,6 +16,7 @@ anyone else.
 Notes
 * When you tell her to stop following, her own default AI takes over again and she may wander back toward the
   keep, like any NPC heading home. Keep her following, or send her somewhere with Mantella.
+* Since 0.2.0 the Breton woman is named **Elyse Marrow**; see `Tools/LWFreedPrisoner` for her background and where she stays in Whiterun.
 * Turn it off: disable the plugin in Vortex (no save cleanup needed; the flag simply comes back).
 * Without the plugin, a console stopgap: `prid c1aa4`, `setrelationshiprank player 3`, `addfac 5c84d 0` makes her a
   vanilla potential follower (it does not stop the respawn reset).
