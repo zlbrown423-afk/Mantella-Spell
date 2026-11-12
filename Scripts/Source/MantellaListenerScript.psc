@@ -225,6 +225,10 @@ Event OnPlayerLoadGame()
     _lwRegisterPending = false ; LIVINGWORLD PATCH: done here, not again from OnUpdate
     repository.LivingWorldRegisterPerception() ; LIVINGWORLD PATCH: listen for HIGGS grabs and eating again
     repository.LivingWorldRestoreChatter() ; LIVINGWORLD PATCH: undo a chatter mute left over from before this load
+    MantellaAdvancedAction_LeadTo leadQuest = Game.GetFormFromFile(0x339B8E, "Mantella.esp") as MantellaAdvancedAction_LeadTo
+    if leadQuest
+        leadQuest.LivingWorldResumeWatch() ; LIVINGWORLD PATCH: watch a LeadTo trip that was running in this save
+    endIf
     ; conversation.RegisterForConversationEvents()
     RegisterForSingleUpdate(repository.radiantFrequency)
 EndEvent
