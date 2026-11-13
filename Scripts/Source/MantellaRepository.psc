@@ -3228,8 +3228,10 @@ endFunction
 ; The NPC's own choice: the server only offers Undress, and the NPC decides in conversation whether  ;
 ; to use it (see livingworld/actions/undress.json in MantellaExtension). Nothing here decides that.  ;
 ; Undress unequips every worn, playable armor and clothing item (weapons stay; nothing leaves the    ;
-; inventory, unlike RemoveAllItems) and remembers what it took off. If the NPC's AI puts something    ;
-; back on, it comes off again for LivingWorldUndressHoldSeconds, until Dress, combat or death.        ;
+; inventory, unlike RemoveAllItems) and remembers what it took off. With an "item" argument (body,    ;
+; feet, hands, head, cloak, jewelry) only that piece comes off (LwUndressMask); "all" or none: all.   ;
+; If the NPC's AI puts something back on, it comes off again for LivingWorldUndressHoldSeconds,     ;
+; until Dress, combat or death.                                                                      ;
 ; Dress puts the remembered items back on. Both queue an attire record with via=action, so the       ;
 ; server remembers it as the NPC's choice and witnesses within sight remember seeing it.             ;
 ; Children are never undressed (LivingWorldIsPerson).                                                ;
@@ -3269,12 +3271,40 @@ Actor function LwSingleSource(Form speaker, Form conversationQuest, int argument
 endFunction
 
 Event OnLwUndressAdvanced(Form speaker, Form conversationQuest, int argumentsHandle)
-    LwUndress(LwSingleSource(speaker, conversationQuest, argumentsHandle))
+    LwUndress(LwSingleSource(speaker, conversationQuest, argumentsHandle), LwUndressMask(SKSE_HTTP.getString(argumentsHandle, "item", "")))
 EndEvent
 
 Event OnLwUndressBasic(Form speaker)
-    LwUndress(speaker as Actor)
+    LwUndress(speaker as Actor, 0)
 EndEvent
+
+; The armor slots one piece covers (slot 30 = bit 0). 0 = everything. The server sends one of
+; body, feet, hands, head, cloak, jewelry or all (livingworld/dialogue/undress_words.py PARTS).
+int function LwUndressMask(string item)
+    if (item == "" || item == "all")
+        return 0
+    endIf
+    int mask = 0
+    if (StringUtil.Find(item, "body") >= 0)
+        mask += 0x00000004                    ; 32 body (tunic, dress, robe, body armor)
+    endIf
+    if (StringUtil.Find(item, "feet") >= 0)
+        mask += 0x00000180                    ; 37 feet + 38 calves
+    endIf
+    if (StringUtil.Find(item, "hands") >= 0)
+        mask += 0x00000018                    ; 33 hands + 34 forearms
+    endIf
+    if (StringUtil.Find(item, "head") >= 0)
+        mask += 0x00001803                    ; 30 head + 31 hair + 41 long hair + 42 circlet
+    endIf
+    if (StringUtil.Find(item, "cloak") >= 0)
+        mask += 0x00010400                    ; 46 and 40, where cloak mods put cloaks
+    endIf
+    if (StringUtil.Find(item, "jewel") >= 0)
+        mask += 0x00000060                    ; 35 amulet + 36 ring
+    endIf
+    return mask
+endFunction
 
 Event OnLwDressAdvanced(Form speaker, Form conversationQuest, int argumentsHandle)
     LwDress(LwSingleSource(speaker, conversationQuest, argumentsHandle))
@@ -3309,7 +3339,7 @@ bool function LwTakesOff(Armor item)
     return item && item.IsPlayable()
 endFunction
 
-function LwUndress(Actor npc)
+function LwUndress(Actor npc, int slotMask = 0)
     if (!npc || npc == PlayerRef || !LivingWorldIsPerson(npc))
         return   ; never the player, never children
     endIf
@@ -3322,15 +3352,25 @@ function LwUndress(Actor npc)
     while (stored < LwUndressItemsPerNpc && _lwUndressItems[base + stored])
         stored += 1   ; undressing again: keep what was remembered the first time
     endWhile
+    string taken = ""
     int bit = 0
     while (bit < 32)
-        Armor item = npc.GetWornForm(Math.LeftShift(1, bit)) as Armor
-        if (LwTakesOff(item))
+        int slotBit = Math.LeftShift(1, bit)
+        Armor item = None
+        if (slotMask == 0 || Math.LogicalAnd(slotMask, slotBit) != 0)
+            item = npc.GetWornForm(slotBit) as Armor
+        endIf
+        if (LwTakesOff(item) && npc.IsEquipped(item))
             if (stored < LwUndressItemsPerNpc && LwUndressFind(base, item) < 0)
                 _lwUndressItems[base + stored] = item
                 stored += 1
             endIf
             npc.UnequipItem(item, false, true)
+            if (taken == "")
+                taken = item.GetName()
+            elseIf (StringUtil.Find(taken, item.GetName()) < 0)
+                taken += ", " + item.GetName()
+            endIf
         endIf
         bit += 1
     endWhile
@@ -3338,7 +3378,13 @@ function LwUndress(Actor npc)
     _lwUndressOrder[slot] = _lwUndressCounter
     Utility.Wait(0.5)
     LivingWorldQueue(LivingWorldAttireRecord(npc) + "|via=action")
-    ListenerScript.AddIngameEventToConversation(npc.GetDisplayName() + " took off their clothes.")
+    if (slotMask == 0)
+        ListenerScript.AddIngameEventToConversation(npc.GetDisplayName() + " took off their clothes.")
+    elseIf (taken != "")
+        ListenerScript.AddIngameEventToConversation(npc.GetDisplayName() + " took off " + taken + ".")
+    else
+        ListenerScript.AddIngameEventToConversation(npc.GetDisplayName() + " had nothing like that on to take off.")
+    endIf
     int handle = ModEvent.Create("MantellaLivingWorld_UndressHold")
     if (handle)
         ModEvent.PushForm(handle, npc)
