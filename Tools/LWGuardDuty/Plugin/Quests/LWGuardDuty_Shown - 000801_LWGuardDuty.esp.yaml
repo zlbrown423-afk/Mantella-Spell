@@ -1,0 +1,43 @@
+FormKey: 000801:LWGuardDuty.esp
+EditorID: LWGuardDuty_Shown
+Name:
+  TargetLanguage: English
+  Value: Guard Duty
+Priority: 40
+Type: SideQuest
+Stages:
+- Index: 10
+  LogEntries:
+  - Entry:
+      TargetLanguage: English
+      Value: 'My superior in the guard gave me a duty. I should see it through, then report back.'
+Objectives:
+- Index: 10
+  DisplayText:
+    TargetLanguage: English
+    Value: <Alias=DutyText>
+- Index: 20
+  DisplayText:
+    TargetLanguage: English
+    Value: <Alias=ReportText>
+  Targets:
+  - AliasID: 2
+NextAliasID: 3
+Aliases:
+- Name: DutyText
+  Flags:
+  - Optional
+  - AllowReserved
+  VoiceTypes: Null
+- ID: 1
+  Name: ReportText
+  Flags:
+  - Optional
+  - AllowReserved
+  VoiceTypes: Null
+- ID: 2
+  Name: Superior
+  Flags:
+  - Optional
+  - AllowReserved
+  VoiceTypes: Null

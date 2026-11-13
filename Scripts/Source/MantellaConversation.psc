@@ -417,6 +417,9 @@ function ProcessNpcSpeak(int handle)
     if(SKSE_HTTP.hasKey(handle, "mantella_lw_guard_watch_task")) ; LIVINGWORLD PATCH: guard careers G2e, the shift's watch windows
         repository.LivingWorldGuardWatch(SKSE_HTTP.getInt(handle, "mantella_lw_guard_watch_task"), SKSE_HTTP.getFloat(handle, "mantella_lw_guard_watch_end"), SKSE_HTTP.getFloatArray(handle, "mantella_lw_guard_watch_at"), SKSE_HTTP.getIntArray(handle, "mantella_lw_guard_watch_win"), SKSE_HTTP.getIntArray(handle, "mantella_lw_guard_watch_kind"), SKSE_HTTP.getStringArray(handle, "mantella_lw_guard_watch_obs"), SKSE_HTTP.getFloat(handle, "mantella_lw_guard_watch_cooldown", 3.0))
     endif
+    if(SKSE_HTTP.hasKey(handle, "mantella_lw_duty_hud_task")) ; LIVINGWORLD PATCH: guard careers, the duty in hand as a journal objective (LWGuardDuty.esp)
+        LivingWorldGuardDuty(handle)
+    endif
     if(SKSE_HTTP.hasKey(handle, "mantella_lw_guard_bed_id")) ; LIVINGWORLD PATCH: guard careers, the barracks bunk
         repository.LivingWorldGuardBed(SKSE_HTTP.getInt(handle, "mantella_lw_guard_bed_id"), SKSE_HTTP.getString(handle, "mantella_lw_guard_bed_plugin", "Skyrim.esm"), SKSE_HTTP.getBool(handle, "mantella_lw_guard_bed_own"))
     endif
@@ -988,6 +991,32 @@ function LivingWorldDiaryPages(int handle)
     if (eventHandle)
         ModEvent.PushString(eventHandle, SKSE_HTTP.getString(handle, "mantella_lw_diary_title", "Diary"))
         ModEvent.PushString(eventHandle, joined)
+        ModEvent.Send(eventHandle)
+    endIf
+endFunction
+
+; LIVINGWORLD PATCH: guard careers. The duty in hand (task 0 = none: close it), passed to LWGuardDuty.esp, which
+; shows it as the journal quest "Guard Duty" until the shift is over. Without that plugin nobody listens.
+function LivingWorldGuardDuty(int handle)
+    Form boss = None
+    int bossId = SKSE_HTTP.getInt(handle, "mantella_lw_duty_hud_boss_id", 0)
+    string bossPlugin = SKSE_HTTP.getString(handle, "mantella_lw_duty_hud_boss_plugin", "")
+    if (bossId > 0 && bossPlugin != "")
+        boss = Game.GetFormFromFile(bossId, bossPlugin)
+    endIf
+    int eventHandle = ModEvent.Create("LivingWorld_GuardDuty")
+    if (eventHandle)
+        ModEvent.PushInt(eventHandle, SKSE_HTTP.getInt(handle, "mantella_lw_duty_hud_task", 0))
+        ModEvent.PushString(eventHandle, SKSE_HTTP.getString(handle, "mantella_lw_duty_hud_text", ""))
+        ModEvent.PushFloat(eventHandle, SKSE_HTTP.getFloat(handle, "mantella_lw_duty_hud_end", 0.0))
+        ModEvent.PushFloat(eventHandle, SKSE_HTTP.getFloat(handle, "mantella_lw_duty_hud_ready", -1.0))
+        ModEvent.PushFloat(eventHandle, SKSE_HTTP.getFloat(handle, "mantella_lw_duty_hud_report_by", 0.0))
+        ModEvent.PushBool(eventHandle, SKSE_HTTP.getBool(handle, "mantella_lw_duty_hud_seen", false))
+        ModEvent.PushString(eventHandle, SKSE_HTTP.getString(handle, "mantella_lw_duty_hud_boss", ""))
+        ModEvent.PushForm(eventHandle, boss)
+        ModEvent.PushString(eventHandle, SKSE_HTTP.getString(handle, "mantella_lw_duty_hud_outcome", ""))
+        ModEvent.PushInt(eventHandle, SKSE_HTTP.getInt(handle, "mantella_lw_duty_hud_last", 0))
+        ModEvent.PushFloat(eventHandle, SKSE_HTTP.getFloat(handle, "mantella_lw_duty_hud_every", 180.0))
         ModEvent.Send(eventHandle)
     endIf
 endFunction
