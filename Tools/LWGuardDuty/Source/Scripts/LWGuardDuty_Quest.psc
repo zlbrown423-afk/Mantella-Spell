@@ -62,7 +62,7 @@ EndEvent
 
 ; ---- from the Mantella server (via MantellaConversation) ----
 
-Event OnGuardDuty(Int newTask, String text, Float endGt, Float readyAt, Float reportBy, Bool isSeen, String bossName, Form bossForm, String outcome, Int lastTask, Float everySeconds)
+Event OnGuardDuty(Int newTask, String text, Float aEndGt, Float aReadyAt, Float aReportBy, Bool isSeen, String bossName, Form bossForm, String outcome, Int lastTask, Float everySeconds)
 	If newTask == 0
 		If Task != 0
 			If lastTask == Task
@@ -77,9 +77,9 @@ Event OnGuardDuty(Int newTask, String text, Float endGt, Float readyAt, Float re
 		Open(newTask)
 	EndIf
 	DutyLine = text
-	EndGt = endGt
-	ReadyAt = readyAt
-	ReportBy = reportBy
+	EndGt = aEndGt
+	ReadyAt = aReadyAt
+	ReportBy = aReportBy
 	Seen = isSeen
 	Boss = bossName
 	Every = everySeconds
