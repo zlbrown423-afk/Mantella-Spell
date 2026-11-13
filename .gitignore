@@ -11,3 +11,7 @@ GPT_SECRET_KEY.txt
 Tools/LWHaptics/build/
 Tools/LWHaptics/Dist/
 !Tools/LWHaptics/LivingWorldHaptics.ini
+# LWGuardDuty build output
+Tools/LWGuardDuty/Build/
+Tools/LWGuardDuty/Dist/
+Tools/LWGuardDuty/Scripts/

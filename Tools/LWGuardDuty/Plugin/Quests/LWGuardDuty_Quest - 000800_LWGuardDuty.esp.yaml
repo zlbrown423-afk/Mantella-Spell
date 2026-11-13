@@ -1,0 +1,19 @@
+FormKey: 000800:LWGuardDuty.esp
+EditorID: LWGuardDuty_Quest
+VirtualMachineAdapter:
+  Scripts:
+  - Name: LWGuardDuty_Quest
+    Properties:
+    - MutagenObjectType: ScriptObjectProperty
+      Name: Shown
+      Object: 000801:LWGuardDuty.esp
+    - MutagenObjectType: ScriptObjectProperty
+      Name: TextBase
+      Object: 000802:LWGuardDuty.esp
+  Versioning:
+  - Break0
+  ExtraBindDataVersion: 0
+  FileName: ''
+Flags:
+- StartGameEnabled
+Priority: 10

@@ -1,0 +1,14 @@
+SpriggitSource:
+  PackageName: Spriggit.Yaml.Skyrim
+  Version: 0.41
+ModKey: LWGuardDuty.esp
+GameRelease: SkyrimVR
+ModHeader:
+  Stats:
+    Version: 1.7
+  Author: Living World
+  Description: 'Guard Duty: the guard duty in hand as a journal objective until the shift is over (Living World build of Mantella).'
+  MasterReferences:
+  - Master: Skyrim.esm
+    FileSize: 0
+  INTV: 1
