@@ -7,7 +7,7 @@ $spriggit = 'D:\ModdingTools\Spriggit\Spriggit.CLI.exe'
 $compiler = 'C:\Program Files (x86)\Steam\steamapps\common\Skyrim Special Edition\Papyrus Compiler\PapyrusCompiler.exe'
 $vanilla  = 'D:\ModdingTools\VanillaScripts\Source\Scripts'
 $gameData = 'D:\SteamLibrary\steamapps\common\SkyrimVR\Data'
-$version  = '0.1.0'
+$version  = '0.2.0'
 # ModEvent and ObjectReference.SetDisplayName (SKSE) are needed: SKSE's sources come from the game's Data folder
 # when the vanilla set lacks them.
 $skse     = "$gameData\Scripts\Source"

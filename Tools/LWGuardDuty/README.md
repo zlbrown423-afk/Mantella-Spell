@@ -5,7 +5,9 @@ journal quest**, "Guard Duty", kept in front of you until the shift is over.
 
 * When your superior gives you a duty, the quest starts and its objective pops up at the top of the view:
   *"Stand watch at the main gate until 2:00 pm (3 h left). Be seen at your post"*.
-* It pops up again every 3 minutes (real time) with the time left, so it never slips out of mind.
+* It pops up again every 3 minutes (real time) with the time left, so it never slips out of mind. Each time, the
+  same line is also shown 4 times in a row in the top-left corner, 3 seconds apart (about 12 seconds in all), so
+  there is time to read it (`NoticeRepeats` / `NoticeGap` on `LWGuardDuty_Quest`).
   `MANTELLA_LW_DUTY_HUD_EVERY=0` on the server shows it only when something changes; any other number is the
   seconds between reminders.
 * Once you may report back (seen at your post and half the shift gone, or the trouble dealt with) a second

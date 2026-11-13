@@ -21,6 +21,8 @@ Quest Property Shown Auto                  ; LWGuardDuty_Shown: the journal entr
 MiscObject Property TextBase Auto          ; LWGuardDuty_Text: the hidden references whose names are the texts
 Float Property PollSeconds = 10.0 Auto Hidden
 Float Property CloseDelay = 5.0 Auto Hidden   ; seconds the ticked-off / failed objective stays before it closes
+Int Property NoticeRepeats = 4 Auto Hidden      ; each reminder is shown this often in the top-left corner...
+Float Property NoticeGap = 3.0 Auto Hidden      ; ...this many seconds apart, so it stays up long enough to read
 
 Int Task                  ; the duty shown (server task id); 0 = none
 String DutyLine
@@ -36,6 +38,8 @@ Float ShownAt             ; real time of the last reminder
 Float LastReal
 ObjectReference DutyRef
 ObjectReference ReportRef
+String Pending            ; the reminder still being repeated in the corner
+Int PendingLeft
 
 Event OnInit()
 	If IsRunning()
@@ -57,8 +61,30 @@ Event OnUpdate()
 	If Task != 0
 		Refresh(False)
 	EndIf
-	RegisterForSingleUpdate(PollSeconds)
+	If PendingLeft > 0 && Task != 0
+		ShowPending()
+	Else
+		PendingLeft = 0
+		RegisterForSingleUpdate(PollSeconds)
+	EndIf
 EndEvent
+
+; A notification only shows for a few seconds, so a reminder is shown NoticeRepeats times, NoticeGap apart.
+Function Notice(String text)
+	Pending = text
+	PendingLeft = NoticeRepeats
+	ShowPending()
+EndFunction
+
+Function ShowPending()
+	Debug.Notification(Pending)
+	PendingLeft -= 1
+	If PendingLeft > 0
+		RegisterForSingleUpdate(NoticeGap)
+	Else
+		RegisterForSingleUpdate(PollSeconds)
+	EndIf
+EndFunction
 
 ; ---- from the Mantella server (via MantellaConversation) ----
 
@@ -183,14 +209,23 @@ Function Refresh(Bool changed)
 			Shown.SetObjectiveFailed(10)   ; never seen at the post: reporting now is a false report
 		EndIf
 	EndIf
+	String note = ""
+	If Phase < 3
+		note = "Guard duty: " + DutyText(now)
+	EndIf
 	If Phase >= 2
 		ReportRef.SetDisplayName(ReportText(), True)
 		If Phase != was || changed || Phase == 3
 			Shown.SetObjectiveDisplayed(20, True, True)
 		EndIf
+		If note != ""
+			note += ". "
+		EndIf
+		note += ReportText()
 	ElseIf Shown.IsObjectiveDisplayed(20)
 		Shown.SetObjectiveDisplayed(20, False)
 	EndIf
+	Notice(note)
 EndFunction
 
 String Function DutyText(Float now)
