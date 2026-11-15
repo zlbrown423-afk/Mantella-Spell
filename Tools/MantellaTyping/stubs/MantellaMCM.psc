@@ -1,0 +1,1 @@
+Scriptname MantellaMCM extends Quest

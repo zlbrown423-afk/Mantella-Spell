@@ -676,14 +676,17 @@ function GetPlayerTextInput()
     ; but if this runtime increases in the future the delay may become noticeable
     BuildContext()
 
-    UIExtensions.InitMenu("UITextEntryMenu")
-    UIExtensions.OpenMenu("UITextEntryMenu")
-
-    string result = UIExtensions.GetMenuResultString("UITextEntryMenu")
+    ; VR TYPING PATCH: UITextEntryMenu takes no keyboard input in VR, so read text saved by the desktop typing window
+    ; (Tools/MantellaTyping). To restore upstream behaviour, revert this hunk.
+    string typingFile = "Data/MantellaTyping/input.txt"
+    string result = MiscUtil.ReadFromFile(typingFile)
     if (result && result != "")
+        MiscUtil.WriteToFile(typingFile, "", false, false)
         sendRequestForPlayerInput(result, updateContext=False)
         _does_accept_player_input = False
         ClearRepeatingMessage()
+    else
+        Debug.Notification("Mantella: nothing typed in the desktop window")
     endIf
 endFunction
 
