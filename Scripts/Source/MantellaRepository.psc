@@ -1365,6 +1365,10 @@ int property LivingWorldBedOwn = -1 auto hidden   ; pending: 1 = give, 0 = take 
 int property LivingWorldChestBase = 0 auto hidden
 string property LivingWorldChestPlugin = "" auto hidden
 ObjectReference property LivingWorldChestRef auto hidden
+;; The bunk the footlocker was set against. When the server gives the player a different bunk (it moved the
+;; bunk to the one nearest the door on 2026-11-15), the footlocker, with what is in it, follows the first time
+;; the player stands by the new bunk. 0 on older saves: it moves unless it already stands by the current bunk.
+int property LivingWorldChestBedId = 0 auto hidden
 
 function LivingWorldGuardChest(int baseId, string plugin)
     if (LivingWorldChestRef)
@@ -1376,7 +1380,11 @@ function LivingWorldGuardChest(int baseId, string plugin)
 endFunction
 
 function LivingWorldGuardChestRetry()
-    if (LivingWorldChestBase == 0 || LivingWorldChestRef || LivingWorldBedId == 0)
+    if (LivingWorldBedId == 0)
+        return
+    endIf
+    bool toMove = (LivingWorldChestRef != None) && (LivingWorldChestBedId != LivingWorldBedId)
+    if (!toMove && (LivingWorldChestBase == 0 || LivingWorldChestRef))
         return
     endIf
     ObjectReference bed = Game.GetFormFromFile(LivingWorldBedId, LivingWorldBedPlugin) as ObjectReference
@@ -1384,6 +1392,18 @@ function LivingWorldGuardChestRetry()
         return   ; not there yet, or the bunk is not the player's
     endIf
     if (PlayerRef.GetDistance(bed) > 180.0)
+        return
+    endIf
+    if (toMove)
+        ObjectReference chest = LivingWorldChestRef
+        if (chest.GetParentCell() != bed.GetParentCell() || chest.GetDistance(bed) > 200.0)
+            chest.Disable()
+            chest.MoveTo(bed)                ; into the bunk's cell first, then square against it
+            LwPlaceBesideBed(chest, bed)
+            chest.Enable()
+            Debug.Notification("Your footlocker has been moved to your new bunk.")
+        endIf
+        LivingWorldChestBedId = LivingWorldBedId
         return
     endIf
     Form base = Game.GetFormFromFile(LivingWorldChestBase, LivingWorldChestPlugin)
@@ -1397,6 +1417,7 @@ function LivingWorldGuardChestRetry()
         chest.Enable()
         chest.SetActorOwner(PlayerRef.GetActorBase())
         LivingWorldChestRef = chest
+        LivingWorldChestBedId = LivingWorldBedId
         LivingWorldChestBase = 0
         Debug.Notification("A footlocker by your bunk is yours to use.")
     endIf
@@ -1641,7 +1662,18 @@ function LivingWorldGuardBed(int id, string plugin, bool own)
     LivingWorldGuardBedRetry()
 endFunction
 
+;; The bunk the player holds now (0 = none). The bunk by the door is not a persistent reference, so the
+;; barracks resetting could hand it back to the guard; while it is held it is made the player's again whenever
+;; it is loaded and someone else owns it.
+int property LivingWorldBedHeld = 0 auto hidden
+
 function LivingWorldGuardBedRetry()
+    if (LivingWorldBedOwn < 0 && LivingWorldBedHeld != 0)
+        ObjectReference held = Game.GetFormFromFile(LivingWorldBedHeld, LivingWorldBedPlugin) as ObjectReference
+        if (held && held.Is3DLoaded() && held.GetActorOwner() != PlayerRef.GetActorBase())
+            held.SetActorOwner(PlayerRef.GetActorBase())
+        endIf
+    endIf
     LivingWorldGuardChestRetry()
     if (LivingWorldBedOwn < 0 || LivingWorldBedId == 0)
         return
@@ -1652,11 +1684,16 @@ function LivingWorldGuardBedRetry()
     endIf
     if (LivingWorldBedOwn == 1)
         bed.SetActorOwner(PlayerRef.GetActorBase())
+        LivingWorldBedHeld = LivingWorldBedId
         Debug.Notification("Your bunk in the barracks is ready.")
     else
         bed.SetActorOwner(None)
+        if (LivingWorldBedHeld == LivingWorldBedId)
+            LivingWorldBedHeld = 0
+        endIf
     endIf
     LivingWorldBedOwn = -1
+    LivingWorldGuardChestRetry()   ; a bunk just given: the footlocker can go by it now
 endFunction
 
 ;; LIVINGWORLD PATCH: guard careers G2e, shift encounters. The server sends the watch windows of the duty in
