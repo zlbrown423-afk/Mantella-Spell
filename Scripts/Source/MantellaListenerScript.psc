@@ -215,8 +215,21 @@ Function RemoveActorFromArray(Actor[] actors, Actor toRemove)
 EndFunction
 
 Event OnPlayerLoadGame()
+    ; LIVINGWORLD PATCH: a conversation running in this save is ended (the server's side of it belongs to whatever
+    ; was played before this load) and then started again with the same people, so it carries on (see
+    ; LivingWorldResumeTick). The server shows the NPC what was said up to the save.
+    _lwResumeCast = None
+    repository.LivingWorldResumeWait = false
+    repository.LivingWorldResumeStarting = false
+    repository.LivingWorldResumeConv = 0
     If(conversation.IsRunning())
-        conversation.EndConversation()
+        if !repository.LivingWorldResumeOff
+            _lwResumeCast = conversation.LivingWorldResumeCast()
+            repository.LivingWorldResumeConv = repository.LivingWorldConvId
+            repository.LivingWorldResumeWait = true
+            _lwResumeUntil = Utility.GetCurrentRealTime() + 60.0
+        endIf
+        conversation.EndConversationAfterLoad()
     endif
     ; LIVINGWORLD PATCH: tell the server about this load with the next conversation start, so NPCs
     ; forget whatever happened after this save
@@ -230,8 +243,86 @@ Event OnPlayerLoadGame()
         leadQuest.LivingWorldResumeWatch() ; LIVINGWORLD PATCH: watch a LeadTo trip that was running in this save
     endIf
     ; conversation.RegisterForConversationEvents()
-    RegisterForSingleUpdate(repository.radiantFrequency)
+    if repository.LivingWorldResumeWait ; LIVINGWORLD PATCH: check back soon for the restart
+        RegisterForSingleUpdate(3.0)
+    else
+        RegisterForSingleUpdate(repository.radiantFrequency)
+    endIf
 EndEvent
+
+; LIVINGWORLD PATCH: picking a conversation back up after a save load
+Actor[] _lwResumeCast = None
+float _lwResumeUntil = 0.0
+
+; Returns true while the restart is still to come (check again shortly). Waits for the old conversation to finish
+; closing, then starts again with whoever from it is still close by, alive, loaded and not fighting. Gives up after
+; a minute, if the player fights or starts another conversation first, or if nobody qualifies.
+bool function LivingWorldResumeTick()
+    if !repository.LivingWorldResumeWait
+        _lwResumeCast = None
+        return false
+    endIf
+    if Utility.GetCurrentRealTime() > _lwResumeUntil || _lwResumeCast == None || PlayerRef.IsInCombat()
+        LivingWorldResumeDrop()
+        return false
+    endIf
+    if conversation.IsRunning() || Utility.IsInMenuMode()
+        return true ; the old conversation is still closing, or the game is paused
+    endIf
+    float maxDistance = ConvertMeterToGameUnits(15.0)
+    Actor[] actors = new Actor[6]
+    actors[0] = PlayerRef
+    int n = 1
+    int i = 0
+    while i < _lwResumeCast.Length
+        Actor a = _lwResumeCast[i]
+        if a != None && !a.IsDead() && a.Is3DLoaded() && !a.IsInCombat() && PlayerRef.GetDistance(a) <= maxDistance
+            actors[n] = a
+            n += 1
+        endIf
+        i += 1
+    endWhile
+    if n < 2
+        LivingWorldResumeDrop()
+        return false
+    endIf
+    Actor[] cast = LivingWorldFirstActors(actors, n) ; StartConversation counts the array: only the people found
+    _lwResumeCast = None
+    repository.LivingWorldResumeWait = false
+    repository.LivingWorldResumeStarting = true
+    Debug.Notification("Picking the conversation back up...")
+    conversation.Start()
+    conversation.StartConversation(cast)
+    return false
+endFunction
+
+Actor[] function LivingWorldFirstActors(Actor[] actors, int n)
+    Actor[] out
+    if n <= 2
+        out = new Actor[2]
+    elseif n == 3
+        out = new Actor[3]
+    elseif n == 4
+        out = new Actor[4]
+    elseif n == 5
+        out = new Actor[5]
+    else
+        return actors
+    endIf
+    int i = 0
+    while i < out.Length
+        out[i] = actors[i]
+        i += 1
+    endWhile
+    return out
+endFunction
+
+function LivingWorldResumeDrop()
+    _lwResumeCast = None
+    repository.LivingWorldResumeWait = false
+    repository.LivingWorldResumeStarting = false
+    repository.LivingWorldResumeConv = 0
+endFunction
 
 function StartGroupConversation()
     ; TODO: Remove redundancy with OnUpdate code
@@ -333,6 +424,10 @@ function LivingWorldWatchTick()
 endFunction
 
 event OnUpdate()
+    if repository.LivingWorldResumeWait && LivingWorldResumeTick() ; LIVINGWORLD PATCH: restart after a load still to come
+        RegisterForSingleUpdate(2.0)
+        return
+    endIf
     if (_lwRegisterPending) ; LIVINGWORLD PATCH: the new game's deferred registration (see OnInit)
         _lwRegisterPending = false
         repository.LivingWorldRegisterPerception()
