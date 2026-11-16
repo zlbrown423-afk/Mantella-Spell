@@ -31,6 +31,12 @@ int property LivingWorldTimelineId auto        ; timeline this save is on (0 unt
 int property LivingWorldLoadNonce auto         ; random number picked at each load (0 = no load seen yet)
 float property LivingWorldLoadedGameDays auto  ; game days at that load
 string property LivingWorldWorldKey auto       ; LIVINGWORLD PATCH: the world (memories) this save belongs to, kept across a rename ("" until the server names one)
+; LIVINGWORLD PATCH: picking a conversation back up after a save load (MANTELLA_LW_RESUME on the server)
+int property LivingWorldConvId auto           ; the server's id of the conversation running in this save (0 = none)
+int property LivingWorldResumeConv auto       ; set at a load: that id, sent with the restart, then cleared
+bool property LivingWorldResumeWait auto       ; a restart after a load is still to come
+bool property LivingWorldResumeStarting auto   ; the conversation being started is that restart
+bool property LivingWorldResumeOff auto        ; the server said not to restart conversations after a load
 int property MantellaListenerTextHotkey auto
 int property MantellaEndHotkey auto
 int property MantellaCustomGameEventHotkey auto

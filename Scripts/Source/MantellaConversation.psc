@@ -148,6 +148,10 @@ endFunction
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 function StartConversation(Actor[] actorsToStartConversationWith)
+    if (repository.LivingWorldResumeWait && !repository.LivingWorldResumeStarting) ; LIVINGWORLD PATCH: another conversation
+        repository.LivingWorldResumeWait = false ; started first, so the one from the loaded save is not restarted
+        repository.LivingWorldResumeConv = 0
+    endif
     int handle = SKSE_HTTP.createDictionary()
     SKSE_HTTP.setString(handle, mConsts.KEY_REQUESTTYPE, mConsts.KEY_REQUESTTYPE_INIT)
     ; send request to initialize Mantella settings (set LLM connection, start up TTS service, load character_df etc) 
@@ -253,6 +257,12 @@ function ContinueConversation(string nextAction, int handle)
         endif
         if(SKSE_HTTP.hasKey(handle, "mantella_lw_world_key")) ; LIVINGWORLD PATCH: remember the world in the save, so a rename keeps the memories
             repository.LivingWorldWorldKey = SKSE_HTTP.getString(handle, "mantella_lw_world_key", repository.LivingWorldWorldKey)
+        endif
+        if(SKSE_HTTP.hasKey(handle, "mantella_lw_conv_id")) ; LIVINGWORLD PATCH: remember the conversation in the save, to pick it back up after a load
+            repository.LivingWorldConvId = SKSE_HTTP.getInt(handle, "mantella_lw_conv_id", 0)
+        endif
+        if(SKSE_HTTP.hasKey(handle, "mantella_lw_resume_off")) ; LIVINGWORLD PATCH: MANTELLA_LW_RESUME=0 on the server
+            repository.LivingWorldResumeOff = SKSE_HTTP.getBool(handle, "mantella_lw_resume_off", false)
         endif
         if(SKSE_HTTP.hasKey(handle, "mantella_lw_timeline_id")) ; LIVINGWORLD PATCH: remember the timeline in the save
             repository.LivingWorldTimelineId = SKSE_HTTP.getInt(handle, "mantella_lw_timeline_id", repository.LivingWorldTimelineId)
@@ -672,6 +682,40 @@ Function EndConversation()
     SKSE_HTTP.sendLocalhostHttpRequest(handle, repository.HttpPort, mConsts.HTTP_ROUTE_MAIN)
 EndFunction
 
+; LIVINGWORLD PATCH: the end request sent when a save loads with this conversation still running. The flag tells the
+; server the game time it carries is the loaded save's, so what was said after the save is not stamped before it.
+Function EndConversationAfterLoad()
+    _hasBeenStopped = true
+    int handle = SKSE_HTTP.createDictionary()
+    SKSE_HTTP.setString(handle, mConsts.KEY_REQUESTTYPE,mConsts.KEY_REQUESTTYPE_ENDCONVERSATION)
+    SKSE_HTTP.setFloat(handle, mConsts.KEY_ENDCONVERSATION_TIMESTAMP, GameDaysPassed.GetValue() + 1) ; +1 because days start at 0
+    SKSE_HTTP.setBool(handle, "mantella_lw_load_end", true)
+    SKSE_HTTP.sendLocalhostHttpRequest(handle, repository.HttpPort, mConsts.HTTP_ROUTE_MAIN)
+EndFunction
+
+; LIVINGWORLD PATCH: the NPCs in this conversation (up to 5, the rest None), for picking it back up after a load.
+; Empty when the player is not in it (NPC-to-NPC talk is not restarted).
+Actor[] Function LivingWorldResumeCast()
+    Actor[] cast = new Actor[5]
+    bool playerIn = false
+    int n = 0
+    int i = 0
+    While i < Participants.GetSize()
+        Actor a = Participants.GetAt(i) as Actor
+        if a == PlayerRef
+            playerIn = true
+        elseif a != None && n < 5
+            cast[n] = a
+            n += 1
+        endIf
+        i += 1
+    EndWhile
+    if !playerIn
+        return new Actor[1]
+    endIf
+    return cast
+EndFunction
+
 Function CleanupConversation()
     int i = 0
     ClearParticipants()
@@ -695,6 +739,7 @@ Function CleanupConversation()
     repository.LivingWorldRestoreChatter() ; LIVINGWORLD PATCH: vanilla hellos and idle chatter back on
     repository.LwConvSet(repository.LW_CONV_IDLE) ; LIVINGWORLD PATCH: conversation states, let go
     repository.LwTouchConversationEnded() ; LIVINGWORLD PATCH: touch consent, agreements run out a few minutes from now
+    repository.LivingWorldConvId = 0 ; LIVINGWORLD PATCH: a save made from now on holds no conversation to pick back up
     Debug.Notification("Conversation ended.")  
     Stop()
 EndFunction
@@ -1338,6 +1383,13 @@ function AddLivingWorldLoadInfo(int handle)
         SKSE_HTTP.setInt(handle, "mantella_lw_timeline_id", repository.LivingWorldTimelineId)
         SKSE_HTTP.setInt(handle, "mantella_lw_load_nonce", repository.LivingWorldLoadNonce)
         SKSE_HTTP.setFloat(handle, "mantella_lw_loaded_game_days", repository.LivingWorldLoadedGameDays)
+    endif
+    if (repository.LivingWorldResumeStarting) ; the restart of the conversation the loaded save was in
+        if (repository.LivingWorldResumeConv > 0)
+            SKSE_HTTP.setInt(handle, "mantella_lw_resume_conv", repository.LivingWorldResumeConv)
+        endif
+        repository.LivingWorldResumeStarting = false
+        repository.LivingWorldResumeConv = 0
     endif
 endFunction
 
