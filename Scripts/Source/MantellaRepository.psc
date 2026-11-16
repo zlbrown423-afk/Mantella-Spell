@@ -3890,6 +3890,25 @@ float _lwbRecWindowAt = 0.0
 int _lwbRecCount = 0
 Idle _lwbArmsIdle
 
+; LIVINGWORLD PATCH: conversation states. Mantella's own requests say what the talk is doing: the player's
+; turn (LISTENING: mic open or typing), the player's words sent and the reply being worked out (THINKING),
+; an NPC line arriving (SPEAKING), and the end. While the player talks, NPCs within 4 m look at them
+; (attentive ones hold the gaze, shy ones glance); while the reply is worked out, one reserved NPC per turn
+; looks away for a moment. Only SetLookAt / ClearLookAt / SetHeadTracking, each called once per change.
+; Nothing is sent to the server. MantellaConversation sets the state (LwConvSet); the server's start reply
+; switches it (mantella_lw_conv_anim_on, MANTELLA_LW_CONV_ANIM).
+bool property LwConvAnimOn = true auto hidden
+int property LW_CONV_IDLE = 0 autoreadonly
+int property LW_CONV_LISTENING = 1 autoreadonly
+int property LW_CONV_THINKING = 2 autoreadonly
+int property LW_CONV_SPEAKING = 3 autoreadonly
+int _lwcState = 0
+float _lwcStateAt = 0.0
+int _lwcTurn = 0              ; bumped each time the player's words are sent
+int _lwcThinkTurnAny = -1     ; the turn in which someone already looked away (one NPC per turn)
+int[] _lwcThinkTurn           ; per slot: the turn of their last look away
+float[] _lwcLastThinkAt
+
 ; Called from LivingWorldRegisterPerception on every load: undoes anything a save kept half done.
 function LwBodyReset()
     if (_lwbActors && _lwbActors.Length == 4)
@@ -3933,6 +3952,9 @@ function LwBodyReset()
     _lwbPeekUntil = new float[4]
     _lwbNextPeekAt = new float[4]
     _lwbPeekRecAt = new float[4]
+    _lwcThinkTurn = new int[4]
+    _lwcLastThinkAt = new float[4]
+    _lwcState = 0
     if (!_lwbProfPeek || _lwbProfPeek.Length != 16 || !_lwbProfActors || _lwbProfActors.Length != 16)
         _lwbProfPeek = new float[16]
         int k = 0
@@ -4311,6 +4333,10 @@ function LwBodyStep(int i, Actor a, float now, bool weaponDrawnNow, bool inTalk)
         return   ; her eyes are down on the naked player for a moment
     endIf
 
+    if (inTalk && LwConvAnimOn && LwConvStep(i, a, d, now))
+        return   ; LIVINGWORLD PATCH: conversation states (listening / thinking)
+    endIf
+
     ; gaze: Mantella sets look-at between speakers in its conversations, so only outside them
     if (inTalk || busy)
         if (_lwbLookHeld[i] || _lwbGlanceUntil[i] > 0.0)
@@ -4362,6 +4388,127 @@ function LwBodyStep(int i, Actor a, float now, bool weaponDrawnNow, bool inTalk)
             _lwbNextGlanceAt[i] = now + 9.0
         endIf
     endIf
+endFunction
+
+; LIVINGWORLD PATCH: conversation states. Called by MantellaConversation when the talk moves on.
+function LwConvSet(int state)
+    if (state == _lwcState)
+        return
+    endIf
+    _lwcState = state
+    _lwcStateAt = Utility.GetCurrentRealTime()
+    if (state == LW_CONV_THINKING)
+        _lwcTurn += 1
+    elseIf (state != LW_CONV_LISTENING)
+        ; let go now, before Mantella turns the speaker's and listener's heads to each other
+        LwConvLetGo()
+    endIf
+endFunction
+
+; The server's start reply (mantella_lw_conv_anim_on). Off lets go of anything held.
+function LivingWorldSetConvAnim(bool on)
+    if (on == LwConvAnimOn)
+        return
+    endIf
+    LwConvAnimOn = on
+    if (!on)
+        LwConvLetGo()
+    endIf
+endFunction
+
+; Undo the looks this file holds on conversation participants (only the ones it set itself).
+function LwConvLetGo()
+    if (!_lwbActors || _lwbActors.Length != 4)
+        return
+    endIf
+    MantellaConversation conv = ListenerScript.conversation
+    int i = 0
+    while (i < 4)
+        Actor a = _lwbActors[i]
+        if (a && conv && conv.Participants.HasForm(a))
+            if (_lwbLookHeld[i] || _lwbGlanceUntil[i] > 0.0)
+                a.ClearLookAt()
+                _lwbLookHeld[i] = false
+                _lwbGlanceUntil[i] = 0.0
+            endIf
+            if (_lwbHeadAwayUntil[i] > 0.0)
+                a.SetHeadTracking(true)
+                _lwbHeadAwayUntil[i] = 0.0
+            endIf
+        endIf
+        i += 1
+    endWhile
+endFunction
+
+; One tick for a participant while the player talks (LISTENING) or the reply is worked out (THINKING).
+; Returns false when the state or the NPC is not one to act on; the caller then lets go as before.
+bool function LwConvStep(int i, Actor a, float d, float now)
+    int state = _lwcState
+    if ((state != LW_CONV_LISTENING && state != LW_CONV_THINKING) || !_lwcThinkTurn)
+        return false
+    endIf
+    if (now - _lwcStateAt > 60.0)
+        return false   ; a state that never moved on (a lost reply): do nothing
+    endIf
+    int sit = a.GetSitState()
+    if (d >= 4.0 || a.IsOnMount() || a.IsUnconscious() || a.IsBleedingOut() || (sit != 0 && sit != 3))
+        return false   ; far away, riding, down, or sitting down / getting up
+    endIf
+    if (_lwScAny && LwInScene(a) >= 0)
+        return false   ; OStim is in charge
+    endIf
+    float gaze = _lwbGaze[i]
+    ; a look away in progress
+    if (_lwbHeadAwayUntil[i] > 0.0)
+        if (now < _lwbHeadAwayUntil[i])
+            return true
+        endIf
+        a.SetHeadTracking(true)
+        _lwbHeadAwayUntil[i] = 0.0
+    endIf
+    ; thinking: one reserved NPC per turn looks away for a moment, at most every 15 s each
+    if (state == LW_CONV_THINKING && gaze < 0.6 && _lwcThinkTurnAny != _lwcTurn && _lwcThinkTurn[i] != _lwcTurn && now - _lwcLastThinkAt[i] >= 15.0 && now - _lwcStateAt >= 0.4)
+        _lwcThinkTurnAny = _lwcTurn
+        _lwcThinkTurn[i] = _lwcTurn
+        _lwcLastThinkAt[i] = now
+        if (_lwbLookHeld[i] || _lwbGlanceUntil[i] > 0.0)
+            a.ClearLookAt()
+            _lwbLookHeld[i] = false
+            _lwbGlanceUntil[i] = 0.0
+        endIf
+        a.SetHeadTracking(false)
+        _lwbHeadAwayUntil[i] = now + 1.5
+        return true
+    endIf
+    ; listening: attentive ones hold the player's gaze, shy ones glance at them now and then
+    if (gaze >= 0.35)
+        if (_lwbGlanceUntil[i] > 0.0)
+            _lwbGlanceUntil[i] = 0.0   ; already looking: keep it
+            _lwbLookHeld[i] = true
+        endIf
+        if (!_lwbLookHeld[i])
+            a.SetLookAt(PlayerRef)
+            _lwbLookHeld[i] = true
+        endIf
+        return true
+    endIf
+    if (_lwbLookHeld[i])
+        a.ClearLookAt()
+        _lwbLookHeld[i] = false
+    endIf
+    if (_lwbGlanceUntil[i] > 0.0)
+        if (now >= _lwbGlanceUntil[i])
+            a.ClearLookAt()
+            _lwbGlanceUntil[i] = 0.0
+        endIf
+        return true
+    endIf
+    if (now >= _lwbNextGlanceAt[i])
+        a.SetLookAt(PlayerRef)
+        _lwbGlanceUntil[i] = now + 2.0
+        _lwbNextGlanceAt[i] = now + 6.0
+    endIf
+    return true
 endFunction
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;

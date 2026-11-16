@@ -190,6 +190,9 @@ function ContinueConversation(string nextAction, int handle)
         if(SKSE_HTTP.hasKey(handle, "mantella_lw_body_on")) ; LIVINGWORLD PATCH: body language (BL1) on or off
             repository.LivingWorldSetBodyLanguage(SKSE_HTTP.getBool(handle, "mantella_lw_body_on", true))
         endif
+        if(SKSE_HTTP.hasKey(handle, "mantella_lw_conv_anim_on")) ; LIVINGWORLD PATCH: conversation states (listening / thinking) on or off
+            repository.LivingWorldSetConvAnim(SKSE_HTTP.getBool(handle, "mantella_lw_conv_anim_on", true))
+        endif
         if(SKSE_HTTP.hasKey(handle, "mantella_lw_gestures_on")) ; LIVINGWORLD PATCH: VR gestures (BL2) on or off
             repository.LivingWorldSetGestures(SKSE_HTTP.getBool(handle, "mantella_lw_gestures_on", true), SKSE_HTTP.getBool(handle, "mantella_lw_gesture_notices", true))
         endif
@@ -243,12 +246,14 @@ function ContinueConversation(string nextAction, int handle)
             _playerInputPending = false
             StopCurrentVoiceline()
         EndIf
+        repository.LwConvSet(repository.LW_CONV_SPEAKING) ; LIVINGWORLD PATCH: conversation states
         int npcTalkHandle = SKSE_HTTP.getNestedDictionary(handle, mConsts.KEY_REPLYTYPE_NPCTALK)
         ; Debug.Trace((Utility.GetCurrentRealTime() - httpReceivedTime) + " seconds to get NPC talk handle", 2)
         ProcessNpcSpeak(npcTalkHandle)
         RequestContinueConversation()
     elseIf(nextAction == mConsts.KEY_REPLYTYPE_PLAYERTALK)
         _does_accept_player_input = True
+        repository.LwConvSet(repository.LW_CONV_LISTENING) ; LIVINGWORLD PATCH: conversation states
         If (repository.microphoneEnabled && !repository.useHotkeyToStartMic)
             sendRequestForVoiceTranscribe()
         Else
@@ -612,6 +617,7 @@ Function CleanupConversation()
     endIf 
     MantellaVanillaDialogue.notifyConversationEnd()
     repository.LivingWorldRestoreChatter() ; LIVINGWORLD PATCH: vanilla hellos and idle chatter back on
+    repository.LwConvSet(repository.LW_CONV_IDLE) ; LIVINGWORLD PATCH: conversation states, let go
     repository.LwTouchConversationEnded() ; LIVINGWORLD PATCH: touch consent, agreements run out a few minutes from now
     Debug.Notification("Conversation ended.")  
     Stop()
@@ -634,6 +640,11 @@ endEvent
 function sendRequestForPlayerInput(string playerInput, bool updateContext)
     if(!_hasBeenStopped)
         _playerInputPending = true
+        if (playerInput != "") ; LIVINGWORLD PATCH: conversation states, the player's words are on their way
+            repository.LwConvSet(repository.LW_CONV_THINKING)
+        else
+            repository.LwConvSet(repository.LW_CONV_LISTENING)
+        endIf
         int handle = SKSE_HTTP.createDictionary()
         SKSE_HTTP.setString(handle, mConsts.KEY_REQUESTTYPE, mConsts.KEY_REQUESTTYPE_PLAYERINPUT)
         SKSE_HTTP.setString(handle, mConsts.KEY_REQUESTTYPE_PLAYERINPUT, playerinput)
