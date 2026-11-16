@@ -396,6 +396,9 @@ function ProcessNpcSpeak(int handle)
             _lastTopicInfo = topicID
         endIf
     endIf
+    if(SKSE_HTTP.hasKey(handle, "mantella_lw_face")) ; LIVINGWORLD PATCH: face test command ("debug face happy")
+        repository.LivingWorldFaceTest(SKSE_HTTP.getString(handle, "mantella_lw_face", ""), speaker, self)
+    endif
     if(SKSE_HTTP.hasKey(handle, "mantella_lw_body")) ; LIVINGWORLD PATCH: body language (BL1), expression profiles that changed
         repository.LivingWorldBodyProfiles(SKSE_HTTP.getStringArray(handle, "mantella_lw_body"), self)
     endif

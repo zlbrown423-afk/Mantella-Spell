@@ -1995,6 +1995,9 @@ Event OnUpdate()
         endIf
     endIf
     _lwTickDue = 0.0
+    if (_lwFaceUntil > 0.0 && (now >= _lwFaceUntil || (_lwScAny && LwInScene(_lwFaceActor) >= 0)))
+        LwFaceClear()   ; LIVINGWORLD PATCH: face test, the hold is over (or OStim took the NPC)
+    endIf
     if (_lwProbeOn)
         LwProbeTick(lag)
     elseIf (lag > LivingWorldStallSeconds && !Utility.IsInMenuMode() && now - _lwLastStallAt > 10.0)
@@ -2055,6 +2058,9 @@ function LwScheduleNext(float now)
     endIf
     if (LwGesturesActive() && (due < 0.0 || _lwgDueAt < due))
         due = _lwgDueAt
+    endIf
+    if (_lwFaceUntil > 0.0 && (due < 0.0 || _lwFaceUntil < due))
+        due = _lwFaceUntil
     endIf
     if (due >= 0.0)
         LwScheduleTick(due - now)
@@ -3955,6 +3961,7 @@ function LwBodyReset()
     _lwcThinkTurn = new int[4]
     _lwcLastThinkAt = new float[4]
     _lwcState = 0
+    LwFaceClear()
     if (!_lwbProfPeek || _lwbProfPeek.Length != 16 || !_lwbProfActors || _lwbProfActors.Length != 16)
         _lwbProfPeek = new float[16]
         int k = 0
@@ -4403,6 +4410,58 @@ function LwConvSet(int state)
         ; let go now, before Mantella turns the speaker's and listener's heads to each other
         LwConvLetGo()
     endIf
+    if (state == LW_CONV_IDLE)
+        LwFaceClear()
+    endIf
+endFunction
+
+; LIVINGWORLD PATCH: face test command. The server sends 'mood|strength|seconds|Name' with the NPC line
+; after the player said "debug face <mood>" (MantellaExtension livingworld/bodylang/face_test.py). Skyrim's
+; own SetExpressionOverride, "Mood" faces 7-14 only; one NPC at a time; cleared when the hold ends, the
+; conversation ends, the game loads, or an OStim scene takes the NPC.
+Actor _lwFaceActor
+float _lwFaceUntil = 0.0
+
+function LivingWorldFaceTest(string spec, Actor speaker, MantellaConversation conv)
+    string[] f = StringUtil.Split(spec, "|")
+    if (f.Length < 3)
+        return
+    endIf
+    int mood = f[0] as int
+    int strength = f[1] as int
+    float hold = f[2] as float
+    if (mood < 7 || mood > 14 || strength < 0 || strength > 100 || hold <= 0.0 || hold > 30.0)
+        return
+    endIf
+    Actor a = speaker
+    if (f.Length >= 4 && f[3] != "")
+        a = conv.GetActorByName(f[3])
+    endIf
+    if (!a || a == PlayerRef || !a.Is3DLoaded())
+        Debug.Notification("Face test: nobody to show it")
+        return
+    endIf
+    if (_lwScAny && LwInScene(a) >= 0)
+        Debug.Notification("Face test: skipped, " + a.GetDisplayName() + " is in an OStim scene")
+        return
+    endIf
+    LwFaceClear()
+    a.SetExpressionOverride(mood, strength)
+    _lwFaceActor = a
+    float now = Utility.GetCurrentRealTime()
+    _lwFaceUntil = now + hold
+    Debug.Notification("Face test: " + a.GetDisplayName() + " mood " + mood + " at " + strength + "% for " + (hold as int) + " s")
+    if (!_lwProbeOn)   ; while the probe ticks every half second it clears it on its own
+        LwScheduleNext(now)
+    endIf
+endFunction
+
+function LwFaceClear()
+    if (_lwFaceActor)
+        _lwFaceActor.ClearExpressionOverride()
+    endIf
+    _lwFaceActor = None
+    _lwFaceUntil = 0.0
 endFunction
 
 ; The server's start reply (mantella_lw_conv_anim_on). Off lets go of anything held.
