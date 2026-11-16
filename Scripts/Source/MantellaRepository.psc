@@ -4398,19 +4398,19 @@ function LwBodyStep(int i, Actor a, float now, bool weaponDrawnNow, bool inTalk)
 endFunction
 
 ; LIVINGWORLD PATCH: conversation states. Called by MantellaConversation when the talk moves on.
-function LwConvSet(int state)
-    if (state == _lwcState)
+function LwConvSet(int convState)
+    if (convState == _lwcState)
         return
     endIf
-    _lwcState = state
+    _lwcState = convState
     _lwcStateAt = Utility.GetCurrentRealTime()
-    if (state == LW_CONV_THINKING)
+    if (convState == LW_CONV_THINKING)
         _lwcTurn += 1
-    elseIf (state != LW_CONV_LISTENING)
+    elseIf (convState != LW_CONV_LISTENING)
         ; let go now, before Mantella turns the speaker's and listener's heads to each other
         LwConvLetGo()
     endIf
-    if (state == LW_CONV_IDLE)
+    if (convState == LW_CONV_IDLE)
         LwFaceClear()
     endIf
 endFunction
@@ -4502,8 +4502,8 @@ endFunction
 ; One tick for a participant while the player talks (LISTENING) or the reply is worked out (THINKING).
 ; Returns false when the state or the NPC is not one to act on; the caller then lets go as before.
 bool function LwConvStep(int i, Actor a, float d, float now)
-    int state = _lwcState
-    if ((state != LW_CONV_LISTENING && state != LW_CONV_THINKING) || !_lwcThinkTurn)
+    int convState = _lwcState
+    if ((convState != LW_CONV_LISTENING && convState != LW_CONV_THINKING) || !_lwcThinkTurn)
         return false
     endIf
     if (now - _lwcStateAt > 60.0)
@@ -4526,7 +4526,7 @@ bool function LwConvStep(int i, Actor a, float d, float now)
         _lwbHeadAwayUntil[i] = 0.0
     endIf
     ; thinking: one reserved NPC per turn looks away for a moment, at most every 15 s each
-    if (state == LW_CONV_THINKING && gaze < 0.6 && _lwcThinkTurnAny != _lwcTurn && _lwcThinkTurn[i] != _lwcTurn && now - _lwcLastThinkAt[i] >= 15.0 && now - _lwcStateAt >= 0.4)
+    if (convState == LW_CONV_THINKING && gaze < 0.6 && _lwcThinkTurnAny != _lwcTurn && _lwcThinkTurn[i] != _lwcTurn && now - _lwcLastThinkAt[i] >= 15.0 && now - _lwcStateAt >= 0.4)
         _lwcThinkTurnAny = _lwcTurn
         _lwcThinkTurn[i] = _lwcTurn
         _lwcLastThinkAt[i] = now
