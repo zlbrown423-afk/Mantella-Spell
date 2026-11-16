@@ -45,6 +45,12 @@ Actor[] _cachedNearbyActors = None
 bool _waitingForActionResponse = true
 int _actionResponseTimeout = 0
 bool _playerInputPending = false
+bool _repeatingTimed = false ; LIVINGWORLD PATCH: the repeating message is on the 10-second timer (see OnUpdate)
+float _repeatingDue = 0.0 ; LIVINGWORLD PATCH: real time it is next shown
+string[] _lwHeardLines ; LIVINGWORLD PATCH: raw speech recognition HUD, what the mic recognition heard (MANTELLA_LW_ASR_HUD)
+int _lwHeardLeft = 0 ; LIVINGWORLD PATCH: showings still to come
+float _lwHeardGap = 4.0 ; LIVINGWORLD PATCH: seconds between showings
+float _lwHeardDue = 0.0 ; LIVINGWORLD PATCH: real time of the next showing
 
 event OnInit()
     RegisterForConversationEvents()
@@ -65,11 +71,77 @@ Function RegisterForConversationEvents()
 EndFunction
 
 event OnUpdate()
-    If (_repeatingMessage != "")
-        Debug.Notification(_repeatingMessage)
-        RegisterForSingleUpdate(10)
+    ; LIVINGWORLD PATCH: one update timer serves the repeating message (every 10 s, as before) and the
+    ; heard line (every _lwHeardGap s), each shown only when its own time has come
+    float now = Utility.GetCurrentRealTime()
+    If (_repeatingDue > now + 10.0) ; real time restarts with each game launch: a time saved before the load
+        _repeatingDue = now
     EndIf
+    If (_lwHeardDue > now + _lwHeardGap) ; a heard line from before the load is not shown again
+        _lwHeardLeft = 0
+    EndIf
+    If (_repeatingMessage != "" && _repeatingTimed && now >= _repeatingDue - 0.05)
+        Debug.Notification(_repeatingMessage)
+        _repeatingDue = now + 10.0
+    EndIf
+    If (_lwHeardLeft > 0 && now >= _lwHeardDue - 0.05)
+        LivingWorldShowHeard(now)
+    EndIf
+    LivingWorldScheduleUpdate(now)
 endEvent
+
+; LIVINGWORLD PATCH: raw speech recognition HUD. The server adds mantella_lw_asr_* to the reply to a
+; player turn whose words came from the microphone: exactly what the recognition returned, before any
+; NPC hears it. Shown in the notification corner as "[Mic] ...", not as a subtitle; nothing else changes.
+function LivingWorldHeard(int handle)
+    if !SKSE_HTTP.hasKey(handle, "mantella_lw_asr_heard")
+        return
+    endif
+    _lwHeardLines = SKSE_HTTP.getStringArray(handle, "mantella_lw_asr_heard")
+    _lwHeardLeft = SKSE_HTTP.getInt(handle, "mantella_lw_asr_shows", 1)
+    _lwHeardGap = SKSE_HTTP.getFloat(handle, "mantella_lw_asr_gap", 4.0)
+    if _lwHeardGap < 1.0
+        _lwHeardGap = 1.0
+    endif
+    if !_lwHeardLines || _lwHeardLines.Length == 0
+        _lwHeardLeft = 0
+        return
+    endif
+    float now = Utility.GetCurrentRealTime()
+    LivingWorldShowHeard(now)
+    LivingWorldScheduleUpdate(now)
+endFunction
+
+function LivingWorldShowHeard(float now)
+    int i = 0
+    while i < _lwHeardLines.Length
+        Debug.Notification(_lwHeardLines[i])
+        i += 1
+    endWhile
+    _lwHeardLeft -= 1
+    _lwHeardDue = now + _lwHeardGap
+endFunction
+
+; Next update for whichever of the two is due first; none when neither is waiting.
+function LivingWorldScheduleUpdate(float now)
+    float wait = -1.0
+    float heardWait = 0.0
+    If (_repeatingMessage != "" && _repeatingTimed)
+        wait = _repeatingDue - now
+    EndIf
+    If (_lwHeardLeft > 0)
+        heardWait = _lwHeardDue - now
+        If (wait < 0.0 || heardWait < wait)
+            wait = heardWait
+        EndIf
+    EndIf
+    If (_lwHeardLeft > 0 || (_repeatingMessage != "" && _repeatingTimed))
+        If (wait < 0.1)
+            wait = 0.1
+        EndIf
+        RegisterForSingleUpdate(wait)
+    EndIf
+endFunction
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;    Start new conversation   ;
@@ -173,6 +245,7 @@ endEvent
 
 function ContinueConversation(string nextAction, int handle)
     ; Debug.Notification(nextAction)
+    LivingWorldHeard(handle) ; LIVINGWORLD PATCH: show what the mic recognition heard, before the NPC answers
     if(nextAction == mConsts.KEY_REPLYTTYPE_STARTCONVERSATIONCOMPLETED)
         _hasBeenStopped = false
         if(SKSE_HTTP.hasKey(handle,mConsts.KEY_STARTCONVERSATION_USENARRATOR))
@@ -1422,8 +1495,11 @@ endFunction
 Function ShowRepeatingMessage(string messageToShow)
     _repeatingMessage = messageToShow
     if repository.showReminderMessages
+        _repeatingTimed = false ; LIVINGWORLD PATCH: shown once, as before
         Debug.Notification(_repeatingMessage)
     else
+        _repeatingTimed = true ; LIVINGWORLD PATCH: shown now and every 10 s, as before
+        _repeatingDue = 0.0 ; LIVINGWORLD PATCH
         RegisterForSingleUpdate(0)
     endIf
 EndFunction
