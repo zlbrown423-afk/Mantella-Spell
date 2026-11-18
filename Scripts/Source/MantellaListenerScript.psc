@@ -644,6 +644,10 @@ endEvent
 
 
 Event OnObjectEquipped(Form akBaseObject, ObjectReference akReference)
+    if LwIsTonePower(akBaseObject) ; LIVINGWORLD PATCH: picking a "Tone: ..." power on the Spell Wheel sets the tone at once
+        repository.LwPickTone(StringUtil.Substring(akBaseObject.GetName(), 6))
+        return ; a tone is the player's intent, not something the NPCs see
+    endIf
     repository.LivingWorldConsumed(PlayerRef, akBaseObject, "equip") ; LIVINGWORLD PATCH: food, drink, potions
     repository.LivingWorldPlayerAttireMaybeChanged(akBaseObject) ; LIVINGWORLD PATCH: dressing
     if repository.playerTrackingOnObjectEquipped
@@ -657,7 +661,16 @@ Event OnObjectEquipped(Form akBaseObject, ObjectReference akReference)
 endEvent
 
 
+; LIVINGWORLD PATCH: a lesser power from LWToneWheel.esp ("Tone: Stern" ...)
+bool function LwIsTonePower(Form akBaseObject)
+    Spell power = akBaseObject as Spell
+    return power && StringUtil.Find(power.GetName(), "Tone: ") == 0
+endFunction
+
 Event OnObjectUnequipped(Form akBaseObject, ObjectReference akReference)
+    if LwIsTonePower(akBaseObject) ; LIVINGWORLD PATCH: tone wheel powers are not news to the NPCs
+        return
+    endIf
     repository.LivingWorldPlayerAttireMaybeChanged(akBaseObject) ; LIVINGWORLD PATCH: undressing
     if repository.playerTrackingOnObjectUnequipped
         string itemUnequipped = akBaseObject.getname()
