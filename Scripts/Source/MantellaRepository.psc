@@ -5205,9 +5205,23 @@ EndEvent
 ; server answers at once even while a conversation waits for the player to speak; its reply type is the
 ; harmless init-completed one, so MantellaConversation ignores it.
 Event OnLwToneSet(string eventName, string strArg, float numArg, Form sender)
+    LwPickTone(strArg)
+EndEvent
+
+; Also called by MantellaListenerScript when a tone power is equipped (picked on the Spell Wheel), so the tone is set
+; without casting; casting it afterwards sends the same tone again, which is skipped within a few seconds.
+string _lwTonePicked = ""
+float _lwTonePickedAt = -100.0
+function LwPickTone(string strArg)
     if (strArg == "")
         return
     endIf
+    float now = Utility.GetCurrentRealTime()
+    if (strArg == _lwTonePicked && now - _lwTonePickedAt >= 0.0 && now - _lwTonePickedAt < 5.0)
+        return
+    endIf
+    _lwTonePicked = strArg
+    _lwTonePickedAt = now
     if (strArg == "Neutral")
         Debug.Notification("Tone: your own voice")
     else
@@ -5218,7 +5232,7 @@ Event OnLwToneSet(string eventName, string strArg, float numArg, Form sender)
     SKSE_HTTP.setString(handle, "mantella_lw_tone", strArg)
     SKSE_HTTP.setInt(handle, "mantella_lw_tone_speech", PlayerRef.GetActorValue("Speechcraft") as int)
     SKSE_HTTP.sendLocalhostHttpRequest(handle, HttpPort, "Mantella")
-EndEvent
+endFunction
 
 function LwArousalTap()
     Debug.Trace("[LivingWorld] arousal key: intimacy=" + LivingWorldIntimacyOn + " sex=" + PlayerRef.GetActorBase().GetSex() + " level=" + _lwErect)

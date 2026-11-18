@@ -7,8 +7,12 @@ given to the player automatically:
 `Tone: Pleading` · `Tone: Neutral`
 
 Put them on the Spell Wheel (they are powers, so they sit in the voice slot and never take a weapon or spell out
-of your hands). Cast one before you speak: a notification shows `Tone: Stern`, and from then on NPCs judge your
-lines against it.
+of your hands). **Picking one on the wheel sets the tone at once** (no cast needed; `MantellaListenerScript` sees the
+power being equipped): a notification shows `Tone: Stern`, and from then on NPCs judge your lines against it.
+Casting it works too (to pick the same tone again).
+
+Spell Wheel VR (Shizof) only shows favorited items by default: favorite the eight powers in the Magic menu and turn
+on *Favorite Powers* (or *All Powers*) for your hand in its MCM, *Types* page.
 
 * The tone stays until you pick another one, cast **Tone: Neutral**, or the conversation ends. A tone picked
   before you start talking carries into that conversation (for up to ten minutes).
