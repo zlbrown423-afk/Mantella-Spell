@@ -5160,6 +5160,7 @@ function LwRegisterArousalAndEyes()
     RegisterForModEvent("LivingWorld_ArousalFade", "OnLwArousalFade")
     RegisterForModEvent("LivingWorld_EyesCovered", "OnLwEyesCovered")
     RegisterForModEvent("LivingWorld_ArousalStep", "OnLwArousalStep") ; the Arousal power (Spell Wheel friendly)
+    RegisterForModEvent("LivingWorld_ToneSet", "OnLwToneSet") ; the tone wheel powers (LWToneWheel.esp)
     _lwArousalKeyBound = 0   ; register the key again on every load: a saved "already bound" must not skip it
     LwSetArousalKey(LwArousalKey)
     _lwErect = -10        ; animation graphs start over on a load
@@ -5197,6 +5198,26 @@ Event OnLwArousalStep(string eventName, string strArg, float numArg, Form sender
     endIf
     _lwArousalWatch += 1
     SendModEvent("LivingWorld_ArousalFade", "", _lwArousalWatch as float)
+EndEvent
+
+; The tone wheel (LWToneWheel.esp): a "Tone: ..." lesser power names the tone the player means for the lines
+; they speak next. The server compares it with how the voice actually sounds. Sent on its own request, which the
+; server answers at once even while a conversation waits for the player to speak; its reply type is the
+; harmless init-completed one, so MantellaConversation ignores it.
+Event OnLwToneSet(string eventName, string strArg, float numArg, Form sender)
+    if (strArg == "")
+        return
+    endIf
+    if (strArg == "Neutral")
+        Debug.Notification("Tone: your own voice")
+    else
+        Debug.Notification("Tone: " + strArg)
+    endIf
+    int handle = SKSE_HTTP.createDictionary()
+    SKSE_HTTP.setString(handle, "mantella_request_type", "mantella_lw_tone_set")
+    SKSE_HTTP.setString(handle, "mantella_lw_tone", strArg)
+    SKSE_HTTP.setInt(handle, "mantella_lw_tone_speech", PlayerRef.GetActorValue("Speechcraft") as int)
+    SKSE_HTTP.sendLocalhostHttpRequest(handle, HttpPort, "Mantella")
 EndEvent
 
 function LwArousalTap()
