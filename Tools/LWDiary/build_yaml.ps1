@@ -16,6 +16,17 @@ $vanillaJson = Join-Path $PSScriptRoot 'vanilla.json'
 if (!(Test-Path $vanillaJson)) { throw "vanilla.json is missing: run build.ps1 (it makes it with find_vanilla.py)" }
 $vanilla = Get-Content $vanillaJson -Raw | ConvertFrom-Json
 if (!$vanilla.book_model) { throw 'vanilla.json has no book model' }
+# The diary copies a vanilla journal's look: inventory art (the 3D book shown when you inspect or read it, without it
+# the item shows no picture), keywords (VendorItemBook: SkyUI's book icon, merchants buy it) and pick-up sounds.
+$extra = ''
+if ($vanilla.book) {
+    if ($vanilla.book.inventory_art) { $extra += "InventoryArt: $($vanilla.book.inventory_art)`n" }
+    if ($vanilla.book.pickup_sound)  { $extra += "PickUpSound: $($vanilla.book.pickup_sound)`n" }
+    if ($vanilla.book.putdown_sound) { $extra += "PutDownSound: $($vanilla.book.putdown_sound)`n" }
+    if ($vanilla.book.keywords.Count -gt 0) {
+        $extra += "Keywords:`n" + (($vanilla.book.keywords | ForEach-Object { "- $_" }) -join "`n") + "`n"
+    }
+}
 if ($vanilla.tables.Count -eq 0) { throw 'vanilla.json lists no tables' }
 
 $Quest  = "000800:$M"
@@ -63,7 +74,7 @@ Name:
   Value: Diary
 Model:
   File: '$model'
-BookText:
+$($extra)BookText:
   TargetLanguage: English
   Value: '<p align="left">Page after page of small, private handwriting.<br><br>Close the book to read the newest entries.</p>'
 Type: BookOrTome
