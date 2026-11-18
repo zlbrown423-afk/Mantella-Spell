@@ -21,6 +21,7 @@ reply comes back through `MantellaConversation` as `LivingWorld_DiaryPages`. A 4
 the player changed cell. Master: Skyrim.esm only.
 
 Build on the play PC: `powershell -ExecutionPolicy Bypass -File build.ps1`. The first run reads Skyrim.esm with
-`find_vanilla.py` for a journal model and the table objects (kept in `vanilla.json`), then Spriggit + Papyrus
+`find_vanilla.py` for a vanilla journal (model, inventory art, keywords, pick-up sounds, so the diary looks like a
+journal in your inventory and when read; 0.2.0 fixed the missing picture) and the table objects (kept in `vanilla.json`), then Spriggit + Papyrus
 Compiler as for LWSitDown. The zip lands in `Dist\` for Vortex. It needs the Mantella-Spell build with
 `LivingWorldDiaryKeepers` in `MantellaConversation`.

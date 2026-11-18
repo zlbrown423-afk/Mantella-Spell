@@ -7,7 +7,7 @@ $compiler = 'C:\Program Files (x86)\Steam\steamapps\common\Skyrim Special Editio
 $vanilla  = 'D:\ModdingTools\VanillaScripts\Source\Scripts'
 $gameData = 'D:\SteamLibrary\steamapps\common\SkyrimVR\Data'
 $python   = 'D:\ModdingTools\MantellaForks\venv\Scripts\python.exe'
-$version  = '0.1.0'
+$version  = '0.2.0'
 # ModEvent, StringUtil, Cell.GetNthRef (SKSE) and SKSE_HTTP (Mantella) are needed. SKSE's sources come from the
 # game's Data folder when the vanilla set lacks them; SKSE_HTTP.psc comes from this repository.
 $skse     = "$gameData\Scripts\Source"
@@ -22,6 +22,8 @@ $env:PATH = "D:\ModdingTools\dotnet;$env:PATH"
 $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
 
 $vanillaJson = Join-Path $here 'vanilla.json'
+# Remake vanilla.json when it predates the journal look (0.1.0 kept only the model, so the diary had no picture).
+if ((Test-Path $vanillaJson) -and !((Get-Content $vanillaJson -Raw | ConvertFrom-Json).book)) { Remove-Item $vanillaJson }
 if (!(Test-Path $vanillaJson)) {
     if (!(Test-Path $python)) { $python = 'python' }
     & $python -I (Join-Path $here 'find_vanilla.py') $gameData $vanillaJson
