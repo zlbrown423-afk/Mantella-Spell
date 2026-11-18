@@ -16,13 +16,15 @@ Objectives:
   DisplayText:
     TargetLanguage: English
     Value: <Alias=DutyText>
+  Targets:
+  - AliasID: 3
 - Index: 20
   DisplayText:
     TargetLanguage: English
     Value: <Alias=ReportText>
   Targets:
   - AliasID: 2
-NextAliasID: 3
+NextAliasID: 4
 Aliases:
 - Name: DutyText
   Flags:
@@ -37,6 +39,12 @@ Aliases:
   VoiceTypes: Null
 - ID: 2
   Name: Superior
+  Flags:
+  - Optional
+  - AllowReserved
+  VoiceTypes: Null
+- ID: 3
+  Name: Target
   Flags:
   - Optional
   - AllowReserved

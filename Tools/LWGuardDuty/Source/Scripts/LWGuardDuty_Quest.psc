@@ -5,7 +5,8 @@ until the shift is over.
 The objective is the duty and when the shift ends ("Stand watch at the main gate until 2:00 pm, 3 h left").
 It pops up at the top of the view when the duty is given and again every few minutes (the server says how
 often), with the time left. Once the duty may be reported, a second objective appears, "Report back to
-Commander Caius", with a compass marker on them. Between conversations this script keeps the clock itself:
+Commander Caius", with a compass marker on them. A bandit camp duty also gets a compass marker on the camp
+(LivingWorld_GuardDutyTarget, alias Target) until it is dealt with. Between conversations this script keeps the clock itself:
 at the shift's end the duty objective is ticked off (or failed, if the player was never seen at the post)
 and the report one becomes "Shift over: report back to ... by 2:00 am"; past that deadline it fails and the
 quest closes. When the server sees the duty settled it says so and the quest closes the same way.
@@ -50,6 +51,7 @@ EndEvent
 
 Function Listen()
 	RegisterForModEvent("LivingWorld_GuardDuty", "OnGuardDuty")
+	RegisterForModEvent("LivingWorld_GuardDutyTarget", "OnGuardDutyTarget")
 	LastReal = Utility.GetCurrentRealTime()
 EndFunction
 
@@ -118,6 +120,21 @@ Event OnGuardDuty(Int newTask, String text, Float aEndGt, Float aReadyAt, Float 
 	EndIf
 	BossActor = a
 	Refresh(True)
+EndEvent
+
+; The place of the duty (a bandit camp's map marker): a compass marker on the duty objective. None (or a
+; duty already dealt with) takes it away, so the marker then only points at the superior.
+Event OnGuardDutyTarget(Int forTask, Form targetForm)
+	ReferenceAlias place = Shown.GetAlias(3) as ReferenceAlias
+	If !place || !Shown.IsRunning() || forTask != Task
+		Return
+	EndIf
+	ObjectReference r = targetForm as ObjectReference
+	If r
+		place.ForceRefTo(r)
+	Else
+		place.Clear()
+	EndIf
 EndEvent
 
 ; ---- the journal quest ----
