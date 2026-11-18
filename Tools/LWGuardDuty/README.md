@@ -18,6 +18,9 @@ journal quest**, "Guard Duty", kept in front of you until the shift is over.
   closes: the server books it as a missed duty.
 * Reporting back (or the server finding the duty missed) ticks off or fails what is showing, and the quest closes
   a few seconds later. Loading an older save shows the duty as it was in that save.
+* A bandit camp duty (0.3.0) puts a compass marker on the camp itself (its map marker) on the duty objective,
+  until the fight there is on record; then only the superior is marked. `MANTELLA_LW_DUTY_MARKER=0` on the
+  server leaves the camp marker out.
 * `MANTELLA_LW_DUTY_HUD=0` on the server switches it off (a duty that is showing closes at the next conversation).
 
 How it fits together: the server (`livingworld/guard/hud.py`) sends the duty with an NPC line whenever it
@@ -25,7 +28,9 @@ changes; `MantellaConversation` passes it on as the mod event `LivingWorld_Guard
 `LWGuardDuty_Quest` (start-game enabled, no journal entry of its own) runs the visible quest
 `LWGuardDuty_Shown`. Its objectives read `<Alias=DutyText>` and `<Alias=ReportText>`: two hidden, disabled
 references whose names are set with SKSE's `SetDisplayName`, so the text can be anything. The third alias,
-`Superior`, holds the person to report to and is the target of the report objective. Between conversations
+`Superior`, holds the person to report to and is the target of the report objective; the fourth, `Target`,
+holds a bandit camp's map marker (mod event `LivingWorld_GuardDutyTarget`) and is the target of the duty
+objective. Between conversations
 the script keeps the clock itself (a 10-second check). Master: Skyrim.esm only.
 
 Build on the play PC: `powershell -ExecutionPolicy Bypass -File build.ps1` (Spriggit + Papyrus Compiler, the

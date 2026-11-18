@@ -1154,6 +1154,19 @@ function LivingWorldGuardDuty(int handle)
         ModEvent.PushFloat(eventHandle, SKSE_HTTP.getFloat(handle, "mantella_lw_duty_hud_every", 180.0))
         ModEvent.Send(eventHandle)
     endIf
+    ; the place of the duty (a bandit camp's map marker) for a compass marker; None takes it away
+    Form target = None
+    int targetId = SKSE_HTTP.getInt(handle, "mantella_lw_duty_hud_target_id", 0)
+    string targetPlugin = SKSE_HTTP.getString(handle, "mantella_lw_duty_hud_target_plugin", "")
+    if (targetId > 0 && targetPlugin != "")
+        target = Game.GetFormFromFile(targetId, targetPlugin)
+    endIf
+    int targetHandle = ModEvent.Create("LivingWorld_GuardDutyTarget")
+    if (targetHandle)
+        ModEvent.PushInt(targetHandle, SKSE_HTTP.getInt(handle, "mantella_lw_duty_hud_task", 0))
+        ModEvent.PushForm(targetHandle, target)
+        ModEvent.Send(targetHandle)
+    endIf
 endFunction
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
