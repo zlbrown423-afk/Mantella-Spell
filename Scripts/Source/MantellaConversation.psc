@@ -294,6 +294,9 @@ function ContinueConversation(string nextAction, int handle)
         if(SKSE_HTTP.hasKey(handle, "mantella_lw_decency_on")) ; LIVINGWORLD PATCH: guards and a naked player (MANTELLA_LW_DECENCY)
             repository.LwDecencyOn = SKSE_HTTP.getBool(handle, "mantella_lw_decency_on", true)
         endIf
+        if(SKSE_HTTP.hasKey(handle, "mantella_lw_outfit_on")) ; LIVINGWORLD PATCH: outfit manager, followers dressed again after a door (MANTELLA_LW_OUTFIT_MANAGER)
+            repository.LivingWorldOutfitSet(SKSE_HTTP.getBool(handle, "mantella_lw_outfit_on", true), SKSE_HTTP.getBool(handle, "mantella_lw_outfit_notices", true))
+        endIf
         if(SKSE_HTTP.hasKey(handle, "mantella_lw_surrender_on")) ; LIVINGWORLD PATCH: a survivor begs to be spared (MANTELLA_LW_SURRENDER)
             repository.LwSurrenderOn = SKSE_HTTP.getBool(handle, "mantella_lw_surrender_on", true)
         endIf
