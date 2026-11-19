@@ -1888,6 +1888,7 @@ function LivingWorldRegisterAttireAndDrink()
     LwBodyReset() ; LIVINGWORLD PATCH: body language (BL1)
     LwTouchReset() ; LIVINGWORLD PATCH: touch consent (never carried across a load)
     LwGestureReset() ; LIVINGWORLD PATCH: gestures (BL2)
+    LwOutfitOnLoad() ; LIVINGWORLD PATCH: outfit manager, the engine re-outfits followers on a load
     LwScheduleNext(Utility.GetCurrentRealTime())
 endFunction
 
@@ -2025,6 +2026,9 @@ Event OnUpdate()
         if (LivingWorldHygieneOn)
             LwHygieneTick()
         endIf
+        if (LwOutfitOn)
+            LwOutfitTick(now)   ; LIVINGWORLD PATCH: outfit manager, followers dressed again after a door
+        endIf
         if (_lwtAny)
             LwTouchSweep(now)   ; LIVINGWORLD PATCH: touch consent, agreements that ran out
         endIf
@@ -2056,7 +2060,7 @@ EndEvent
 ; The next tick, for whichever comes first: the regular checks (when hygiene is on) or body language.
 function LwScheduleNext(float now)
     float due = -1.0
-    if (LivingWorldHygieneOn)
+    if (LivingWorldHygieneOn || LwOutfitOn)   ; LIVINGWORLD PATCH: the outfit manager rides the regular checks
         due = _lwRegularDueAt
     endIf
     if (LivingWorldBodyLanguageOn && (due < 0.0 || _lwbDueAt < due))
@@ -3518,6 +3522,358 @@ function LwDress(Actor npc)
     Utility.Wait(0.5)
     LivingWorldQueue(LivingWorldAttireRecord(npc) + "|via=action")
     ListenerScript.AddIngameEventToConversation(npc.GetDisplayName() + " got dressed again.")
+endFunction
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; LIVINGWORLD PATCH: outfit manager (MANTELLA_LW_OUTFIT_MANAGER)                                     ;
+; The engine puts a follower back in her default outfit whenever her 3D loads again (a door, fast    ;
+; travel, a save load): what the player gave her comes off, and if her own outfit pieces are gone   ;
+; she walks out naked. For each current follower (an adult player teammate: the vanilla follower    ;
+; quest's alias, or anyone nearby PO3 finds) this keeps a snapshot of the playable armor she wears, ;
+; taken every LwOutfitSnapSeconds while she is dressed and settled. For LwOutfitSettleSeconds after  ;
+; she or the player changes area (interior cell or worldspace, or a jump of LwOutfitJumpUnits), after ;
+; her 3D loads again, after a save load and after she is dismissed, any snapshot piece she still has ;
+; but does not wear goes back on. If she is still naked when that window closes and nothing could   ;
+; be put back, her base outfit is set again (as Dress does).                                         ;
+; A deliberate undress (Undress action / undress prompt, an OStim scene) is left alone while she    ;
+; stays where it happened; when she follows the player somewhere else she is dressed again.         ;
+; Re-dressing a naked follower queues an attire record with via=outfit (server: closes the "seen    ;
+; naked" state, no memories) and traces "Mantella Living World outfit:" to Papyrus.0.log.           ;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+bool property LwOutfitOn = true auto hidden
+bool property LwOutfitNotices = true auto hidden
+float property LwOutfitSettleSeconds = 20.0 auto hidden
+float property LwOutfitScanSeconds = 10.0 auto hidden   ; looking for followers
+float property LwOutfitSnapSeconds = 4.0 auto hidden    ; snapshot of what a settled, dressed follower wears
+float property LwOutfitJumpUnits = 15000.0 auto hidden   ; one tick's move this far: fast travel or a teleport
+float property LwOutfitScanRadius = 4096.0 auto hidden
+int LwOutfitItemsPer = 16   ; pieces remembered per follower; 8 followers x 16 = the 128 of _lwoItems
+
+Actor[] _lwoActors          ; one slot per follower
+Form[] _lwoItems            ; slot * LwOutfitItemsPer .. + LwOutfitItemsPer - 1
+Form[] _lwoPlace            ; where she was last tick (interior cell or worldspace)
+Form[] _lwoHoldPlace        ; undressed on purpose here: left as she is while she stays
+bool[] _lwoLoaded           ; her 3D was loaded last tick
+bool[] _lwoFollowing        ; she was a player teammate last tick
+bool[] _lwoSettling         ; inside a settle window (its end checks once more)
+bool[] _lwoReport           ; dressed again from naked: queue the attire record once it shows
+float[] _lwoSettleUntil
+Form _lwoPlayerPlace
+float _lwoPlayerX = 0.0
+float _lwoPlayerY = 0.0
+float _lwoNextScan = 0.0
+float _lwoNextSnap = 0.0
+Quest _lwoFollowerQuest     ; Skyrim.esm DialogueFollower
+
+; Called on every load (LivingWorldRegisterAttireAndDrink), and by the start reply's switch.
+function LwOutfitOnLoad()
+    if (!_lwoActors)
+        _lwoActors = new Actor[8]
+        _lwoItems = new Form[128]
+        _lwoPlace = new Form[8]
+        _lwoHoldPlace = new Form[8]
+        _lwoLoaded = new bool[8]
+        _lwoFollowing = new bool[8]
+        _lwoSettling = new bool[8]
+        _lwoReport = new bool[8]
+        _lwoSettleUntil = new float[8]
+    endIf
+    _lwoFollowerQuest = Game.GetFormFromFile(0x000750BA, "Skyrim.esm") as Quest
+    float now = Utility.GetCurrentRealTime()   ; real time restarts with the game: every stored time is reset
+    int i = 0
+    while (i < _lwoActors.Length)
+        _lwoLoaded[i] = false   ; the engine re-applies every outfit on a load
+        _lwoSettleUntil[i] = now + LwOutfitSettleSeconds
+        _lwoSettling[i] = _lwoActors[i] != None
+        i += 1
+    endWhile
+    _lwoPlayerPlace = None
+    _lwoNextScan = now
+    _lwoNextSnap = now + LwOutfitSettleSeconds
+endFunction
+
+; The start reply's switches (MANTELLA_LW_OUTFIT_MANAGER, MANTELLA_LW_OUTFIT_NOTICES).
+function LivingWorldOutfitSet(bool on, bool notices)
+    LwOutfitNotices = notices
+    if (on && !LwOutfitOn)
+        LwOutfitOn = true
+        LwOutfitOnLoad()
+        LwScheduleNext(Utility.GetCurrentRealTime())
+    endIf
+    LwOutfitOn = on
+endFunction
+
+; An interior cell, or the worldspace outdoors: walking about outside is not a change of area.
+Form function LwOutfitPlaceOf(Actor a)
+    Cell c = a.GetParentCell()
+    if (c && c.IsInterior())
+        return c
+    endIf
+    WorldSpace w = a.GetWorldSpace()
+    if (w)
+        return w
+    endIf
+    return c
+endFunction
+
+; Regular check (OnUpdate, every LivingWorldHygienePollSeconds).
+function LwOutfitTick(float now)
+    if (!_lwoActors)
+        LwOutfitOnLoad()
+    endIf
+    Form place = LwOutfitPlaceOf(PlayerRef)
+    float x = PlayerRef.GetPositionX()
+    float y = PlayerRef.GetPositionY()
+    if (_lwoPlayerPlace && (place != _lwoPlayerPlace || Math.Abs(x - _lwoPlayerX) + Math.Abs(y - _lwoPlayerY) > LwOutfitJumpUnits))
+        int k = 0   ; the player changed area: everyone with them is about to be re-outfitted by the engine
+        while (k < _lwoActors.Length)
+            if (_lwoActors[k])
+                LwOutfitSettle(k, now)
+            endIf
+            k += 1
+        endWhile
+        _lwoNextScan = now   ; and look for followers in the new place straight away
+    endIf
+    _lwoPlayerPlace = place
+    _lwoPlayerX = x
+    _lwoPlayerY = y
+    if (now >= _lwoNextScan)
+        _lwoNextScan = now + LwOutfitScanSeconds
+        LwOutfitScan(now)
+    endIf
+    bool snap = now >= _lwoNextSnap
+    if (snap)
+        _lwoNextSnap = now + LwOutfitSnapSeconds
+    endIf
+    int i = 0
+    while (i < _lwoActors.Length)
+        if (_lwoActors[i])
+            LwOutfitCheck(i, now, snap)
+        endIf
+        i += 1
+    endWhile
+endFunction
+
+function LwOutfitSettle(int i, float now)
+    _lwoSettleUntil[i] = now + LwOutfitSettleSeconds
+    _lwoSettling[i] = true
+endFunction
+
+; Followers: the vanilla follower quest's aliases, then player teammates nearby (PO3; None without it).
+function LwOutfitScan(float now)
+    if (_lwoFollowerQuest)
+        int n = _lwoFollowerQuest.GetNumAliases()
+        while (n > 0)
+            n -= 1
+            ReferenceAlias follower = _lwoFollowerQuest.GetNthAlias(n) as ReferenceAlias
+            if (follower)
+                LwOutfitTrack(follower.GetActorReference(), now)
+            endIf
+        endWhile
+    endIf
+    Actor[] near = LivingWorldPO3.PeopleNear(PlayerRef, LwOutfitScanRadius, _lwActorTypeNPC)
+    if (near)
+        int i = 0
+        while (i < near.Length)
+            Actor a = near[i]
+            if (a && a.IsPlayerTeammate())
+                LwOutfitTrack(a, now)
+            endIf
+            i += 1
+        endWhile
+    endIf
+endFunction
+
+function LwOutfitTrack(Actor a, float now)
+    if (!a || a == PlayerRef || !LivingWorldIsPerson(a) || !a.IsPlayerTeammate() || _lwoActors.Find(a) >= 0)
+        return   ; children, creatures and the dead are never tracked
+    endIf
+    int slot = _lwoActors.Find(None)
+    if (slot < 0)
+        return   ; eight followers already
+    endIf
+    _lwoActors[slot] = a
+    int base = slot * LwOutfitItemsPer
+    int i = 0
+    while (i < LwOutfitItemsPer)
+        _lwoItems[base + i] = None
+        i += 1
+    endWhile
+    _lwoPlace[slot] = LwOutfitPlaceOf(a)
+    _lwoHoldPlace[slot] = None
+    _lwoLoaded[slot] = a.Is3DLoaded()
+    _lwoFollowing[slot] = true
+    _lwoSettling[slot] = false
+    _lwoReport[slot] = false
+    _lwoSettleUntil[slot] = 0.0
+    if (a.Is3DLoaded() && a.GetWornForm(LivingWorldBodySlotMask) != None && !(_lwScAny && LwInScene(a) >= 0) && !(_lwUndressed && _lwUndressed.Find(a) >= 0))
+        LwOutfitSnapshot(slot, a)   ; dressed when first seen: that is her outfit for now
+    endIf
+    Debug.Trace("Mantella Living World outfit: watching " + a.GetDisplayName() + "'s clothes")
+endFunction
+
+function LwOutfitFree(int i)
+    _lwoActors[i] = None
+    _lwoHoldPlace[i] = None
+    _lwoSettling[i] = false
+    _lwoReport[i] = false
+endFunction
+
+function LwOutfitCheck(int i, float now, bool snap)
+    Actor a = _lwoActors[i]
+    if (a.IsDead() || a.IsChild())
+        LwOutfitFree(i)
+        return
+    endIf
+    bool following = a.IsPlayerTeammate()
+    if (!following && _lwoFollowing[i])
+        LwOutfitSettle(i, now)   ; just dismissed: dressed before she walks home, then let go
+    endIf
+    _lwoFollowing[i] = following
+    if (!following && now >= _lwoSettleUntil[i])
+        LwOutfitFree(i)
+        return
+    endIf
+    if (!a.Is3DLoaded())
+        _lwoLoaded[i] = false
+        return
+    endIf
+    Form place = LwOutfitPlaceOf(a)
+    if (!_lwoLoaded[i] || place != _lwoPlace[i])
+        LwOutfitSettle(i, now)   ; her 3D loaded again or she changed area: the engine re-applies her outfit
+    endIf
+    _lwoLoaded[i] = true
+    _lwoPlace[i] = place
+    ; undressed on purpose: as she is while she stays there; following the player out ends it
+    bool inScene = _lwScAny && LwInScene(a) >= 0
+    bool undressed = _lwUndressed && _lwUndressed.Find(a) >= 0
+    if (inScene || undressed || _lwoHoldPlace[i])
+        if (!_lwoHoldPlace[i])
+            _lwoHoldPlace[i] = place
+        endIf
+        if (inScene || place == _lwoHoldPlace[i])
+            _lwoSettling[i] = false
+            return
+        endIf
+        _lwoHoldPlace[i] = None
+        if (undressed)
+            LwUndressRelease(a)
+        endIf
+        LwOutfitSettle(i, now)
+        Debug.Trace("Mantella Living World outfit: " + a.GetDisplayName() + " left the place she undressed in; dressing her again")
+    endIf
+    bool covered = a.GetWornForm(LivingWorldBodySlotMask) != None
+    if (_lwoReport[i] && covered)
+        _lwoReport[i] = false
+        LivingWorldQueue(LivingWorldAttireRecord(a) + "|via=outfit")
+    endIf
+    if (now < _lwoSettleUntil[i])
+        LwOutfitRestore(i, a, covered)
+    elseIf (_lwoSettling[i])
+        _lwoSettling[i] = false
+        if (!covered)
+            LwOutfitLastResort(i, a)
+        endIf
+    elseIf (snap && covered && a.IsPlayerTeammate())
+        LwOutfitSnapshot(i, a)
+    endIf
+endFunction
+
+; What she wears now becomes the snapshot. Only called while she is dressed and settled.
+function LwOutfitSnapshot(int i, Actor a)
+    int base = i * LwOutfitItemsPer
+    int n = 0
+    int bit = 0
+    while (bit < 32 && n < LwOutfitItemsPer)
+        Armor item = a.GetWornForm(Math.LeftShift(1, bit)) as Armor
+        if (LwTakesOff(item) && LwOutfitFind(base, n, item) < 0)
+            _lwoItems[base + n] = item
+            n += 1
+        endIf
+        bit += 1
+    endWhile
+    while (n < LwOutfitItemsPer)
+        _lwoItems[base + n] = None
+        n += 1
+    endWhile
+endFunction
+
+int function LwOutfitFind(int base, int count, Form item)
+    int i = 0
+    while (i < count)
+        if (_lwoItems[base + i] == item)
+            return i
+        endIf
+        i += 1
+    endWhile
+    return -1
+endFunction
+
+; Inside a settle window: every snapshot piece she still has but does not wear goes back on.
+function LwOutfitRestore(int i, Actor a, bool covered)
+    int base = i * LwOutfitItemsPer
+    int put = 0
+    int gone = 0
+    int k = 0
+    while (k < LwOutfitItemsPer)
+        Armor item = _lwoItems[base + k] as Armor
+        if (item && !a.IsEquipped(item))
+            if (a.GetItemCount(item) > 0)
+                a.EquipItem(item, false, true)
+                put += 1
+            else
+                gone += 1   ; traded away or taken: not hers to wear any more
+            endIf
+        endIf
+        k += 1
+    endWhile
+    if (put == 0)
+        return
+    endIf
+    Debug.Trace("Mantella Living World outfit: " + a.GetDisplayName() + " had " + put + " piece(s) off after a change of area or a load (body covered: " + covered + ", " + gone + " no longer hers); put back on")
+    if (!covered)
+        _lwoReport[i] = true
+        if (LwOutfitNotices)
+            string their = "his"
+            if (a.GetActorBase().GetSex() == 1)
+                their = "her"
+            endIf
+            Debug.Notification(a.GetDisplayName() + " put " + their + " gear back on.")
+        endIf
+    endIf
+endFunction
+
+; The window closed and she is still naked with nothing of hers to put back: her base outfit again.
+function LwOutfitLastResort(int i, Actor a)
+    Outfit usual = a.GetActorBase().GetOutfit()
+    Debug.Trace("Mantella Living World outfit: " + a.GetDisplayName() + " is still naked and has none of her remembered clothes; setting her outfit " + usual)
+    if (usual)
+        a.SetOutfit(usual)
+        _lwoReport[i] = true
+    endIf
+endFunction
+
+; An Undress that is over because she followed the player away: the hold ends and her clothes go back on.
+function LwUndressRelease(Actor npc)
+    int slot = _lwUndressed.Find(npc)
+    if (slot < 0)
+        return
+    endIf
+    _lwUndressCounter += 1
+    _lwUndressOrder[slot] = _lwUndressCounter   ; ends the hold loop
+    int base = slot * LwUndressItemsPerNpc
+    int i = 0
+    while (i < LwUndressItemsPerNpc)
+        Form item = _lwUndressItems[base + i]
+        if (item && npc.GetItemCount(item) > 0 && !npc.IsEquipped(item))
+            npc.EquipItem(item, false, true)
+        endIf
+        _lwUndressItems[base + i] = None
+        i += 1
+    endWhile
+    _lwUndressed[slot] = None
+    _lwUndressOrder[slot] = 0
 endFunction
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
