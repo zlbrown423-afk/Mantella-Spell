@@ -3528,8 +3528,9 @@ endFunction
 ; LIVINGWORLD PATCH: outfit manager (MANTELLA_LW_OUTFIT_MANAGER)                                     ;
 ; The engine puts a follower back in her default outfit whenever her 3D loads again (a door, fast    ;
 ; travel, a save load): what the player gave her comes off, and if her own outfit pieces are gone   ;
-; she walks out naked. For each current follower (an adult player teammate: the vanilla follower    ;
-; quest's alias, or anyone nearby PO3 finds) this keeps a snapshot of the playable armor she wears, ;
+; she walks out naked. For each current follower (an adult player teammate or in Mantella's        ;
+; giafac_following: vanilla follower quest, Mantella's gia_FollowerQst, anyone nearby PO3 finds)   ;
+; this keeps a snapshot of the playable armor she wears,                                            ;
 ; taken every LwOutfitSnapSeconds while she is dressed and settled. For LwOutfitSettleSeconds after  ;
 ; she or the player changes area (interior cell or worldspace, or a jump of LwOutfitJumpUnits), after ;
 ; her 3D loads again, after a save load and after she is dismissed, any snapshot piece she still has ;
@@ -3672,12 +3673,28 @@ function LwOutfitScan(float now)
             endIf
         endWhile
     endIf
-    Actor[] near = LivingWorldPO3.PeopleNear(PlayerRef, LwOutfitScanRadius, _lwActorTypeNPC)
+    if (gia_FollowerQst)   ; Mantella's own Follow action: giafac_following + this quest, no teammate flag
+        int m = gia_FollowerQst.GetNumAliases()
+        while (m > 0)
+            m -= 1
+            ReferenceAlias mantellaFollower = gia_FollowerQst.GetNthAlias(m) as ReferenceAlias
+            if (mantellaFollower)
+                LwOutfitTrack(mantellaFollower.GetActorReference(), now)
+            endIf
+        endWhile
+    endIf
+    Actor[] near
+    if (!_lwNoPo3)
+        near = LivingWorldPO3.PeopleNear(PlayerRef, LwOutfitScanRadius, _lwActorTypeNPC)
+        if (!near)
+            _lwNoPo3 = true   ; the player is always found, so None means the Extender call is missing
+        endIf
+    endIf
     if (near)
         int i = 0
         while (i < near.Length)
             Actor a = near[i]
-            if (a && a.IsPlayerTeammate())
+            if (a && LwOutfitFollows(a))
                 LwOutfitTrack(a, now)
             endIf
             i += 1
@@ -3686,7 +3703,7 @@ function LwOutfitScan(float now)
 endFunction
 
 function LwOutfitTrack(Actor a, float now)
-    if (!a || a == PlayerRef || !LivingWorldIsPerson(a) || !a.IsPlayerTeammate() || _lwoActors.Find(a) >= 0)
+    if (!a || a == PlayerRef || !LivingWorldIsPerson(a) || !LwOutfitFollows(a) || _lwoActors.Find(a) >= 0)
         return   ; children, creatures and the dead are never tracked
     endIf
     int slot = _lwoActors.Find(None)
@@ -3713,6 +3730,11 @@ function LwOutfitTrack(Actor a, float now)
     Debug.Trace("Mantella Living World outfit: watching " + a.GetDisplayName() + "'s clothes")
 endFunction
 
+; Following the player: a teammate (vanilla follower, surrender) or in Mantella's following faction (Follow action).
+bool function LwOutfitFollows(Actor a)
+    return a.IsPlayerTeammate() || (giafac_following && a.IsInFaction(giafac_following) && a.GetFactionRank(giafac_following) >= 0)
+endFunction
+
 function LwOutfitFree(int i)
     _lwoActors[i] = None
     _lwoHoldPlace[i] = None
@@ -3726,7 +3748,7 @@ function LwOutfitCheck(int i, float now, bool snap)
         LwOutfitFree(i)
         return
     endIf
-    bool following = a.IsPlayerTeammate()
+    bool following = LwOutfitFollows(a)
     if (!following && _lwoFollowing[i])
         LwOutfitSettle(i, now)   ; just dismissed: dressed before she walks home, then let go
     endIf
@@ -3775,7 +3797,7 @@ function LwOutfitCheck(int i, float now, bool snap)
         if (!covered)
             LwOutfitLastResort(i, a)
         endIf
-    elseIf (snap && covered && a.IsPlayerTeammate())
+    elseIf (snap && covered && following)
         LwOutfitSnapshot(i, a)
     endIf
 endFunction
@@ -3846,12 +3868,53 @@ endFunction
 
 ; The window closed and she is still naked with nothing of hers to put back: her base outfit again.
 function LwOutfitLastResort(int i, Actor a)
+    int worn = LwOutfitWearWhatSheHas(a)
+    if (worn > 0)
+        Debug.Trace("Mantella Living World outfit: " + a.GetDisplayName() + " was still naked; put on " + worn + " piece(s) from her own pack")
+        _lwoReport[i] = true
+        if (LwOutfitNotices)
+            Debug.Notification(a.GetDisplayName() + " got dressed again.")
+        endIf
+        return
+    endIf
     Outfit usual = a.GetActorBase().GetOutfit()
     Debug.Trace("Mantella Living World outfit: " + a.GetDisplayName() + " is still naked and has none of her remembered clothes; setting her outfit " + usual)
     if (usual)
         a.SetOutfit(usual)
         _lwoReport[i] = true
     endIf
+endFunction
+
+; Nothing remembered (she was already naked when first seen): any playable armor she carries, one piece
+; per armor slot, body first so she is covered. Returns how many pieces went on.
+int function LwOutfitWearWhatSheHas(Actor a)
+    int used = 0
+    int put = 0
+    int pass = 0
+    while (pass < 2)   ; pass 0: body pieces only, pass 1: the rest
+        int n = a.GetNumItems()
+        if (n > 150)
+            n = 150
+        endIf
+        int k = 0
+        while (k < n)
+            Armor item = a.GetNthForm(k) as Armor
+            if (LwTakesOff(item))
+                int mask = item.GetSlotMask()
+                bool body = Math.LogicalAnd(mask, LivingWorldBodySlotMask) != 0
+                if (((pass == 0) == body) && Math.LogicalAnd(mask, used) == 0 && !a.IsEquipped(item))
+                    a.EquipItem(item, false, true)
+                    used = Math.LogicalOr(used, mask)
+                    put += 1
+                elseIf (a.IsEquipped(item))
+                    used = Math.LogicalOr(used, mask)
+                endIf
+            endIf
+            k += 1
+        endWhile
+        pass += 1
+    endWhile
+    return put
 endFunction
 
 ; An Undress that is over because she followed the player away: the hold ends and her clothes go back on.
