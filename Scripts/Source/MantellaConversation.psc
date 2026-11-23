@@ -534,6 +534,9 @@ function ProcessNpcSpeak(int handle)
     if(SKSE_HTTP.hasKey(handle, "mantella_lw_side_job_do")) ; LIVINGWORLD PATCH: side jobs, goods and coin into her pack (no crime gold)
         repository.LwSideJobs(SKSE_HTTP.getStringArray(handle, "mantella_lw_side_job_do"))
     endif
+    if(SKSE_HTTP.hasKey(handle, "mantella_lw_cavalry_order")) ; LIVINGWORLD PATCH: cavalry orders by voice (WhiterunCavalryTraining.esp 0.7.0+)
+        repository.LwCavalryOrder(SKSE_HTTP.getInt(handle, "mantella_lw_cavalry_order", 0))
+    endif
     if(SKSE_HTTP.hasKey(handle, "mantella_lw_guard_release")) ; LIVINGWORLD PATCH: guard careers G2f, prisoners let out
         repository.LivingWorldRelease(SKSE_HTTP.getIntArray(handle, "mantella_lw_guard_release"))
     endif
