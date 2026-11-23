@@ -273,6 +273,11 @@ function ContinueConversation(string nextAction, int handle)
         if(SKSE_HTTP.hasKey(handle, "mantella_lw_body_on")) ; LIVINGWORLD PATCH: body language (BL1) on or off
             repository.LivingWorldSetBodyLanguage(SKSE_HTTP.getBool(handle, "mantella_lw_body_on", true))
         endif
+        if(SKSE_HTTP.hasKey(handle, "mantella_lw_passive_body_on")) ; LIVINGWORLD PATCH: passive body perception (crowding, step back, stare) on or off
+            repository.LivingWorldSetPassiveBody(SKSE_HTTP.getBool(handle, "mantella_lw_passive_body_on", false))
+        else
+            repository.LivingWorldSetPassiveBody(false) ; a server that does not know the switch: keep it off
+        endif
         if(SKSE_HTTP.hasKey(handle, "mantella_lw_conv_anim_on")) ; LIVINGWORLD PATCH: conversation states (listening / thinking) on or off
             repository.LivingWorldSetConvAnim(SKSE_HTTP.getBool(handle, "mantella_lw_conv_anim_on", true))
         endif

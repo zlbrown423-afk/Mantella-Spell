@@ -4269,6 +4269,11 @@ endFunction
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 bool property LivingWorldBodyLanguageOn = true auto hidden   ; the server's start reply switches it (MANTELLA_LW_BODY_LANGUAGE)
+; Passive body perception: approach, crowding (step back, folded arms), stare and the NPC's own gaze reactions
+; outside a conversation. Off by default: only a server that sends mantella_lw_passive_body_on = true (env
+; MANTELLA_LW_PASSIVE_BODY=1) turns it on. Weapon records, women's glances, conversation states and gestures
+; keep working either way, so only the reactions to where the player stands and faces go quiet.
+bool property LivingWorldPassiveBodyOn = false auto hidden
 float property LwBodyWatchMeters = 6.0 auto hidden
 float property LwBodyTickSeconds = 0.5 auto hidden
 float property LwBodyScanSeconds = 2.0 auto hidden
@@ -4459,6 +4464,22 @@ function LivingWorldSetBodyLanguage(bool on)
     elseIf (on && !_lwProbeOn)
         _lwbDueAt = 0.0
         LwScheduleNext(Utility.GetCurrentRealTime())
+    endIf
+endFunction
+
+; The server's start reply (mantella_lw_passive_body_on). Off lets everyone go at once: no step back left
+; running, no folded arms, no held look; the next scan picks them up again for weapons, glances and gestures.
+function LivingWorldSetPassiveBody(bool on)
+    if (on == LivingWorldPassiveBodyOn)
+        return
+    endIf
+    LivingWorldPassiveBodyOn = on
+    if (!on && _lwbActors)
+        int i = 0
+        while (i < 4)
+            LwBodyRelease(i)
+            i += 1
+        endWhile
     endIf
 endFunction
 
@@ -4680,8 +4701,11 @@ function LwBodyStep(int i, Actor a, float now, bool weaponDrawnNow, bool inTalk)
         return
     endIf
 
+    bool passiveOn = LivingWorldPassiveBodyOn   ; off: nothing below reacts to where the player stands or faces
     ; approach: from beyond 5 m to within 3 m in a few seconds
-    if (d > 5.0)
+    if (!passiveOn)
+        ; passive perception off: no approach, crowding, step back or folded arms
+    elseIf (d > 5.0)
         _lwbLastFarAt[i] = now
     elseIf (d < 3.0 && _lwbLastFarAt[i] > 0.0 && now - _lwbLastFarAt[i] < 4.0 && now - _lwbLastApproachAt[i] > 60.0)
         _lwbLastApproachAt[i] = now
@@ -4690,7 +4714,9 @@ function LwBodyStep(int i, Actor a, float now, bool weaponDrawnNow, bool inTalk)
     endIf
 
     ; crowding, with hysteresis
-    if (!_lwbInside[i] && d < comfort)
+    if (!passiveOn)
+        ; (see above)
+    elseIf (!_lwbInside[i] && d < comfort)
         _lwbInside[i] = true
         _lwbInsideSince[i] = now
         _lwbReported[i] = false
@@ -4745,7 +4771,9 @@ function LwBodyStep(int i, Actor a, float now, bool weaponDrawnNow, bool inTalk)
 
     ; facing: the player's body heading (the headset's direction is not readable from Papyrus)
     bool facing = Math.abs(PlayerRef.GetHeadingAngle(a)) < 15.0
-    if (d < 2.0 && facing)
+    if (!passiveOn)
+        _lwbStareSince[i] = 0.0
+    elseIf (d < 2.0 && facing)
         if (_lwbStareSince[i] == 0.0)
             _lwbStareSince[i] = now
         elseIf (now - _lwbStareSince[i] >= 5.0 && now - _lwbLastStareAt[i] >= 90.0)
@@ -4789,6 +4817,13 @@ function LwBodyStep(int i, Actor a, float now, bool weaponDrawnNow, bool inTalk)
     if (_lwbGlanceUntil[i] > 0.0 && now >= _lwbGlanceUntil[i])
         a.ClearLookAt()
         _lwbGlanceUntil[i] = 0.0
+    endIf
+    if (!passiveOn)
+        if (_lwbLookHeld[i])
+            a.ClearLookAt()
+            _lwbLookHeld[i] = false
+        endIf
+        return   ; passive perception off: the NPC's own head tracking, no glances or looking away
     endIf
     if (d >= 4.0)
         if (_lwbLookHeld[i])
