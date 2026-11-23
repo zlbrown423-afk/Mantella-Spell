@@ -1213,12 +1213,16 @@ EndFunction
 Function AddActors(Actor[] actorsToAdd)
     int i = 0
     Form[] actorsAdded = Utility.CreateFormArray(0)
+    bool lwRiderJoined = false ; LIVINGWORLD PATCH: a mounted follower (cavalry rider) joined the conversation
     While i < actorsToAdd.Length
         Actor possibleNewActor = actorsToAdd[i]
         int pos = Participants.Find(possibleNewActor)
         if(pos < 0)
             Participants.AddForm(possibleNewActor)
             possibleNewActor.AddToFaction(MantellaConversationParticipantsFaction)
+            if (possibleNewActor != PlayerRef && possibleNewActor.IsPlayerTeammate() && possibleNewActor.IsOnMount()) ; LIVINGWORLD PATCH
+                lwRiderJoined = true
+            endIf
             actorsAdded = Utility.ResizeFormArray(actorsAdded, actorsAdded.Length + 1)
             actorsAdded[actorsAdded.Length - 1] = possibleNewActor
 
