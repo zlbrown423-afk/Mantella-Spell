@@ -5,7 +5,7 @@ $here     = $PSScriptRoot
 $spriggit = 'D:\ModdingTools\Spriggit\Spriggit.CLI.exe'
 $compiler = 'C:\Program Files (x86)\Steam\steamapps\common\Skyrim Special Edition\Papyrus Compiler\PapyrusCompiler.exe'
 $vanilla  = 'D:\ModdingTools\VanillaScripts\Source\Scripts'
-$version  = '0.1.0'
+$version  = '0.1.1'
 # no SKSE functions are used; the SKSE source path is kept as in LWSitDown in case the vanilla set lacks ModEvent
 $skse     = 'D:\SteamLibrary\steamapps\common\SkyrimVR\Data\Scripts\Source'
 $importList = @((Join-Path $here 'Source\Scripts'))
