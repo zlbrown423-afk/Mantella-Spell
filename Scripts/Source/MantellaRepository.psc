@@ -3513,10 +3513,17 @@ function LwDress(Actor npc)
         _lwUndressOrder[slot] = 0
     endIf
     if (!any)
-        ; nothing remembered (or it was given away): let their own outfit dress them
-        Outfit usual = npc.GetActorBase().GetOutfit()
-        if (usual)
-            npc.SetOutfit(usual)
+        ; nothing remembered by Undress: what the outfit manager last saw her wear, else what she carries;
+        ; her base outfit only if she is still bare (it would take off gear the player gave her)
+        any = LwOutfitDressFromSnapshot(npc) > 0
+        if (!any && npc.GetWornForm(LivingWorldBodySlotMask) == None)
+            any = LwOutfitWearWhatSheHas(npc) > 0
+        endIf
+        if (!any && npc.GetWornForm(LivingWorldBodySlotMask) == None)
+            Outfit usual = npc.GetActorBase().GetOutfit()
+            if (usual)
+                npc.SetOutfit(usual)
+            endIf
         endIf
     endIf
     Utility.Wait(0.5)
@@ -3538,6 +3545,10 @@ endFunction
 ; be put back, her base outfit is set again (as Dress does).                                         ;
 ; A deliberate undress (Undress action / undress prompt, an OStim scene) is left alone while she    ;
 ; stays where it happened; when she follows the player somewhere else she is dressed again.         ;
+; A follower sent home stays watched (household), and Lydia is watched whenever she is in the player's   ;
+; cell: when her 3D loads again (the player comes home, a load) the same window runs, an undress from    ;
+; before the player left is over, and if she is bare she is dressed from her own things. The Dress      ;
+; action uses the snapshot, then what she carries, and her base outfit only if she is still bare.        ;
 ; Re-dressing a naked follower queues an attire record with via=outfit (server: closes the "seen    ;
 ; naked" state, no memories) and traces "Mantella Living World outfit:" to Papyrus.0.log.           ;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -3566,6 +3577,7 @@ float _lwoPlayerY = 0.0
 float _lwoNextScan = 0.0
 float _lwoNextSnap = 0.0
 Quest _lwoFollowerQuest     ; Skyrim.esm DialogueFollower
+Actor _lwoLydia             ; Skyrim.esm 000A2C94: the housecarl, watched at home too
 
 ; Called on every load (LivingWorldRegisterAttireAndDrink), and by the start reply's switch.
 function LwOutfitOnLoad()
@@ -3581,6 +3593,7 @@ function LwOutfitOnLoad()
         _lwoSettleUntil = new float[8]
     endIf
     _lwoFollowerQuest = Game.GetFormFromFile(0x000750BA, "Skyrim.esm") as Quest
+    _lwoLydia = Game.GetFormFromFile(0x000A2C94, "Skyrim.esm") as Actor
     float now = Utility.GetCurrentRealTime()   ; real time restarts with the game: every stored time is reset
     int i = 0
     while (i < _lwoActors.Length)
@@ -3663,6 +3676,9 @@ endFunction
 
 ; Followers: the vanilla follower quest's aliases, then player teammates nearby (PO3; None without it).
 function LwOutfitScan(float now)
+    if (_lwoLydia && _lwoLydia.Is3DLoaded() && _lwoLydia.GetParentCell() == PlayerRef.GetParentCell())
+        LwOutfitTrack(_lwoLydia, now, true)   ; the housecarl: her outfit is reset at home as well
+    endIf
     if (_lwoFollowerQuest)
         int n = _lwoFollowerQuest.GetNumAliases()
         while (n > 0)
@@ -3702,11 +3718,14 @@ function LwOutfitScan(float now)
     endIf
 endFunction
 
-function LwOutfitTrack(Actor a, float now)
-    if (!a || a == PlayerRef || !LivingWorldIsPerson(a) || !LwOutfitFollows(a) || _lwoActors.Find(a) >= 0)
+function LwOutfitTrack(Actor a, float now, bool household = false)
+    if (!a || a == PlayerRef || !LivingWorldIsPerson(a) || (!household && !LwOutfitFollows(a)) || _lwoActors.Find(a) >= 0)
         return   ; children, creatures and the dead are never tracked
     endIf
     int slot = _lwoActors.Find(None)
+    if (slot < 0)
+        slot = LwOutfitSpareSlot()
+    endIf
     if (slot < 0)
         return   ; eight followers already
     endIf
@@ -3720,14 +3739,39 @@ function LwOutfitTrack(Actor a, float now)
     _lwoPlace[slot] = LwOutfitPlaceOf(a)
     _lwoHoldPlace[slot] = None
     _lwoLoaded[slot] = a.Is3DLoaded()
-    _lwoFollowing[slot] = true
+    _lwoFollowing[slot] = LwOutfitFollows(a)
     _lwoSettling[slot] = false
     _lwoReport[slot] = false
     _lwoSettleUntil[slot] = 0.0
+    if (household && a.Is3DLoaded() && a.GetWornForm(LivingWorldBodySlotMask) == None)
+        LwOutfitSettle(slot, now)   ; found bare at home: dressed from her own things once the window closes
+    endIf
     if (a.Is3DLoaded() && a.GetWornForm(LivingWorldBodySlotMask) != None && !(_lwScAny && LwInScene(a) >= 0) && !(_lwUndressed && _lwUndressed.Find(a) >= 0))
         LwOutfitSnapshot(slot, a)   ; dressed when first seen: that is her outfit for now
     endIf
     Debug.Trace("Mantella Living World outfit: watching " + a.GetDisplayName() + "'s clothes")
+endFunction
+
+; A slot to reuse when all eight are taken: someone no longer following and out of sight, else anyone no
+; longer following.
+int function LwOutfitSpareSlot()
+    int fallback = -1
+    int i = 0
+    while (i < _lwoActors.Length)
+        Actor a = _lwoActors[i]
+        if (a && !_lwoFollowing[i] && a != _lwoLydia)
+            if (!a.Is3DLoaded())
+                LwOutfitFree(i)
+                return i
+            endIf
+            fallback = i
+        endIf
+        i += 1
+    endWhile
+    if (fallback >= 0)
+        LwOutfitFree(fallback)
+    endIf
+    return fallback
 endFunction
 
 ; Following the player: a teammate (vanilla follower, surrender) or in Mantella's following faction (Follow action).
@@ -3750,13 +3794,9 @@ function LwOutfitCheck(int i, float now, bool snap)
     endIf
     bool following = LwOutfitFollows(a)
     if (!following && _lwoFollowing[i])
-        LwOutfitSettle(i, now)   ; just dismissed: dressed before she walks home, then let go
+        LwOutfitSettle(i, now)   ; just dismissed: dressed before she walks home
     endIf
-    _lwoFollowing[i] = following
-    if (!following && now >= _lwoSettleUntil[i])
-        LwOutfitFree(i)
-        return
-    endIf
+    _lwoFollowing[i] = following   ; a follower sent home stays watched (household): her outfit is reset at home too
     if (!a.Is3DLoaded())
         _lwoLoaded[i] = false
         return
@@ -3764,6 +3804,14 @@ function LwOutfitCheck(int i, float now, bool snap)
     Form place = LwOutfitPlaceOf(a)
     if (!_lwoLoaded[i] || place != _lwoPlace[i])
         LwOutfitSettle(i, now)   ; her 3D loaded again or she changed area: the engine re-applies her outfit
+        if (!_lwoLoaded[i] && _lwoHoldPlace[i] && !(_lwScAny && LwInScene(a) >= 0))
+            ; the player was away (or loaded a save): an undress from before is over
+            _lwoHoldPlace[i] = None
+            if (_lwUndressed && _lwUndressed.Find(a) >= 0)
+                LwUndressRelease(a)
+            endIf
+            Debug.Trace("Mantella Living World outfit: " + a.GetDisplayName() + " was undressed when the player left; dressing her again")
+        endIf
     endIf
     _lwoLoaded[i] = true
     _lwoPlace[i] = place
@@ -3797,7 +3845,7 @@ function LwOutfitCheck(int i, float now, bool snap)
         if (!covered)
             LwOutfitLastResort(i, a)
         endIf
-    elseIf (snap && covered && following)
+    elseIf (snap && covered)
         LwOutfitSnapshot(i, a)
     endIf
 endFunction
@@ -3883,6 +3931,29 @@ function LwOutfitLastResort(int i, Actor a)
         a.SetOutfit(usual)
         _lwoReport[i] = true
     endIf
+endFunction
+
+; The Dress action for someone the outfit manager watches: her snapshot pieces she still has go back on.
+int function LwOutfitDressFromSnapshot(Actor a)
+    if (!_lwoActors)
+        return 0
+    endIf
+    int i = _lwoActors.Find(a)
+    if (i < 0)
+        return 0
+    endIf
+    int base = i * LwOutfitItemsPer
+    int put = 0
+    int k = 0
+    while (k < LwOutfitItemsPer)
+        Armor item = _lwoItems[base + k] as Armor
+        if (item && !a.IsEquipped(item) && a.GetItemCount(item) > 0)
+            a.EquipItem(item, false, true)
+            put += 1
+        endIf
+        k += 1
+    endWhile
+    return put
 endFunction
 
 ; Nothing remembered (she was already naked when first seen): any playable armor she carries, one piece
