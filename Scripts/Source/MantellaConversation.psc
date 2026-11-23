@@ -1256,6 +1256,9 @@ Function AddActors(Actor[] actorsToAdd)
         BuildNpcsInConversationArray()
         SendActorAddedEvents(actorsAdded)
     EndIf
+    if (lwRiderJoined) ; LIVINGWORLD PATCH: nobody can talk from horseback (vanilla), and Mantella's follower package skips mounted actors,
+        repository.LwCavalryOrder(2) ; so the cavalry riders dismount (WhiterunCavalryTraining.esp order 2); no-op without that plugin
+    endIf
     
     ;PrintActorsInConversation()
 EndFunction
