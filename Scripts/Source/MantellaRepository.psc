@@ -8141,3 +8141,31 @@ function LwGestureOpenArms()
         Debug.Notification("Gesture: open arms to " + to.GetDisplayName())
     endIf
 endFunction
+
+; ------------------------------------------------------------------------------------------------ ;
+; LIVINGWORLD PATCH: cavalry orders by voice                                                       ;
+; The player said "Mount up!" (or another rider order) in a conversation. The server sends         ;
+; mantella_lw_cavalry_order with the next NPC line: one digit per order, in the order spoken       ;
+; (1 mount up, 2 dismount, 3 fall in, 4 line abreast, 5 at ease, 6 rally to me, 7 rally at hall).  ;
+; The Whiterun Cavalry Training Grounds plugin (0.7.0+) does the rest: we put the number in its    ;
+; global WCTG_VoiceOrder (0x1D10) and cast its hidden relay spell (0x1D11) on the player, so       ;
+; neither mod has to compile against the other. Without that plugin nothing happens.              ;
+; ------------------------------------------------------------------------------------------------ ;
+function LwCavalryOrder(int aiOrders)
+    if (aiOrders <= 0)
+        return
+    endIf
+    string plugin = "WhiterunCavalryTraining.esp"
+    if (Game.GetModByName(plugin) == 255)
+        Debug.Trace("[LivingWorld] cavalry order " + aiOrders + " heard, but " + plugin + " is not loaded")
+        return
+    endIf
+    GlobalVariable orders = Game.GetFormFromFile(0x00001D10, plugin) as GlobalVariable
+    Spell relay = Game.GetFormFromFile(0x00001D11, plugin) as Spell
+    if (!orders || !relay)
+        Debug.Notification("Spoken cavalry orders need Whiterun Cavalry Training 0.7.0 or later.")
+        return
+    endIf
+    orders.SetValue(aiOrders as float)
+    relay.Cast(PlayerRef, PlayerRef)
+endFunction
