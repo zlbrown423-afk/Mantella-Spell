@@ -820,6 +820,10 @@ bool function LwStayCandidate(Actor a, Faction onAction)
     if (LwOutfitFollows(a))
         return false   ; Mantella's own followers (Follow action): their follow package moves them, not a drift
     endIf
+    FormList anticsFollow = Game.GetFormFromFile(0x80F, "NPCAntics.esp") as FormList   ; Antics_FollowList (Follow Me spell)
+    if (anticsFollow && anticsFollow.HasForm(a))
+        return false
+    endIf
     if (_lwOrderActors && _lwOrderActors.Find(a) >= 0)
         return false   ; sitting down, going there, fetching drinks: our own orders
     endIf
