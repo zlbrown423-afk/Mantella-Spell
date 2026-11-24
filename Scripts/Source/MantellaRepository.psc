@@ -817,6 +817,9 @@ bool function LwStayCandidate(Actor a, Faction onAction)
     if (a.IsDead() || a.IsInCombat() || a.IsPlayerTeammate() || !a.Is3DLoaded())
         return false
     endIf
+    if (LwOutfitFollows(a))
+        return false   ; Mantella's own followers (Follow action): their follow package moves them, not a drift
+    endIf
     if (_lwOrderActors && _lwOrderActors.Find(a) >= 0)
         return false   ; sitting down, going there, fetching drinks: our own orders
     endIf
@@ -849,7 +852,15 @@ Event OnLwStayOne(Form npcForm)
     if (!a || !ListenerScript.conversation.IsRunning())
         return
     endIf
-    a.PathToReference(PlayerRef, 1.0)   ; latent, on its own event thread
+    ; Not PathToReference: that call waits until the NPC arrives, and a wait left open when the game is
+    ; saved comes back on load (seen 2026-11-24 with Lydia). An offset walk ends after 8 s whatever happens.
+    a.KeepOffsetFromActor(PlayerRef, 0.0, 120.0, 0.0, afCatchUpRadius = 300.0, afFollowRadius = 120.0)
+    int t = 0
+    while (t < 16 && a.Is3DLoaded() && a.GetDistance(PlayerRef) > 200.0 && ListenerScript.conversation.IsRunning())
+        Utility.Wait(0.5)
+        t += 1
+    endWhile
+    a.ClearKeepOffsetFromActor()
     a.EvaluatePackage()                  ; back under Mantella's "stop to talk"
 EndEvent
 
