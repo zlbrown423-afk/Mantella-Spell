@@ -8166,6 +8166,41 @@ function LwCavalryOrder(int aiOrders)
         Debug.Notification("Spoken cavalry orders need Whiterun Cavalry Training 0.7.0 or later.")
         return
     endIf
+    LwCavalrySyncFollowers()
     orders.SetValue(aiOrders as float)
     relay.Cast(PlayerRef, PlayerRef)
+endFunction
+
+; ------------------------------------------------------------------------------------------------ ;
+; LIVINGWORLD PATCH: Mantella's own followers ride too                                             ;
+; Mantella's Follow action puts an NPC in giafac_following + gia_FollowerQst but never makes them  ;
+; a player teammate, so the cavalry plugin (which looks for teammates / CurrentFollowerFaction)    ;
+; did not see them. We keep its FormList WCTG_MantellaFollowers (0x1D13, plugin 0.7.2+) filled     ;
+; with Mantella's current followers: after Follow, after Unfollow and before every spoken order.   ;
+; Without the plugin (or an older one without the list) nothing happens.                           ;
+; ------------------------------------------------------------------------------------------------ ;
+function LwCavalrySyncFollowers()
+    string plugin = "WhiterunCavalryTraining.esp"
+    if (Game.GetModByName(plugin) == 255)
+        return
+    endIf
+    FormList riders = Game.GetFormFromFile(0x00001D13, plugin) as FormList
+    if (!riders)
+        return
+    endIf
+    riders.Revert()
+    if (!gia_FollowerQst)
+        return
+    endIf
+    int n = gia_FollowerQst.GetNumAliases()
+    while (n > 0)
+        n -= 1
+        ReferenceAlias follower = gia_FollowerQst.GetNthAlias(n) as ReferenceAlias
+        if (follower)
+            Actor a = follower.GetActorReference()
+            if (a && !a.IsDead() && !a.IsChild() && LwOutfitFollows(a))
+                riders.AddForm(a)
+            endIf
+        endIf
+    endWhile
 endFunction

@@ -1220,7 +1220,7 @@ Function AddActors(Actor[] actorsToAdd)
         if(pos < 0)
             Participants.AddForm(possibleNewActor)
             possibleNewActor.AddToFaction(MantellaConversationParticipantsFaction)
-            if (possibleNewActor != PlayerRef && possibleNewActor.IsPlayerTeammate() && possibleNewActor.IsOnMount()) ; LIVINGWORLD PATCH
+            if (possibleNewActor != PlayerRef && possibleNewActor.IsOnMount() && repository.LwOutfitFollows(possibleNewActor)) ; LIVINGWORLD PATCH: vanilla or Mantella follower
                 lwRiderJoined = true
             endIf
             actorsAdded = Utility.ResizeFormArray(actorsAdded, actorsAdded.Length + 1)

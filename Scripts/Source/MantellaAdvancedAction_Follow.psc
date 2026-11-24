@@ -40,5 +40,6 @@ Function NpcFollow(Actor speaker)
             repository.gia_FollowerQst.start()
             speaker.EvaluatePackage()
         endif
+        repository.LwCavalrySyncFollowers()   ; LIVINGWORLD PATCH: Mantella followers ride with the cavalry plugin
     endif
 EndFunction

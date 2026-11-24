@@ -41,5 +41,6 @@ Function NpcUnfollow(Actor speaker)
         speaker.SetActorValue("WaitingForPlayer", 0)
         MantellaFollowerUtils.DismissFollower(speaker, repository.gia_FollowerQst, repository.giafac_following)
         repository.LwSurrenderUnfollowed(speaker)   ; LIVINGWORLD PATCH: a survivor goes home
+        repository.LwCavalrySyncFollowers()   ; LIVINGWORLD PATCH: no longer one of the cavalry plugin's riders
     endif
 EndFunction
